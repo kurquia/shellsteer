@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from shellsteer.config import read_networks
+from shellsteer.events import log_pair_mass
 from shellsteer.hooks import Probe, Steer, attach, on_step
 from shellsteer.networks import load_network
 from shellsteer.sampler import generate, prior
@@ -42,10 +43,7 @@ def pair_masks(slots, n_tokens=10):
 
 
 def log_mass(events, slots):
-    minus, plus = slots
-    rows = torch.arange(len(minus))
-    q = events[rows, minus] + events[rows, plus]
-    return 0.5 * torch.log((q[:, 3] ** 2 - (q[:, :3] ** 2).sum(1)).clamp_min(1e-6))
+    return log_pair_mass(events, *slots)
 
 
 def test_alpha_zero_is_the_baseline(network, batch, slots):

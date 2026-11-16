@@ -47,6 +47,7 @@ def write_variant(tmp_path, change):
         (lambda r: r["events"].update(steering=2000000), "events in the file"),
         (lambda r: r["events"].update(directions=0), "events in the file"),
         (lambda r: r["events"].update(n_A=1000), "Extra inputs"),
+        (lambda r: r["events"].update(steering=1000), "more than the 1000 events of events.steering"),
     ],
 )
 def test_bad_values_stop(tmp_path, change, message):

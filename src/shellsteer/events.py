@@ -100,15 +100,23 @@ def edited_tokens(batch: dict[str, torch.Tensor], minus: torch.Tensor, plus: tor
     raise ValueError(f"tokens: {tokens!r} is not pair, minus, plus, or all_of_type")
 
 
-def pair_mass(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
-    """(B,) invariant mass of the pair in GeV, from the four-momenta (px, py, pz, E) that `generate` returns.
-
-    m^2 = (E^- + E^+)^2 - |p^- + p^+|^2, floored at 1e-9 GeV^2 as in the paper, so that the square root and the
-    gradient of log m stay finite.
-    """
+def pair_mass_squared(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
+    """(B,) m^2 = (E^- + E^+)^2 - |p^- + p^+|^2 of the pair in GeV^2, from the four-momenta (px, py, pz, E) that
+    `generate` returns. It can be negative or zero for a badly generated pair."""
     rows = torch.arange(len(minus), device=p4.device)
     total = p4[rows, minus] + p4[rows, plus]
-    return (total[:, 3] ** 2 - (total[:, :3] ** 2).sum(1)).clamp(min=1e-9).sqrt()
+    return total[:, 3] ** 2 - (total[:, :3] ** 2).sum(1)
+
+
+def pair_mass(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
+    """(B,) invariant mass of the pair in GeV, with m^2 floored at 1e-9 GeV^2, as the paper's generated masses."""
+    return pair_mass_squared(p4, minus, plus).clamp(min=1e-9).sqrt()
+
+
+def log_pair_mass(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
+    """(B,) log m of the pair, the quantity the gradients are taken of: 0.5 log m^2, with m^2 floored at 1e-6 GeV^2
+    as in the paper's gradient pass. No square root, so the gradient is finite everywhere."""
+    return 0.5 * torch.log(pair_mass_squared(p4, minus, plus).clamp(min=1e-6))
 
 
 def batches(events: Events, batch_size: int, device: str | torch.device
@@ -132,3 +140,24 @@ def class_of(mass: np.ndarray, classes: Classes) -> np.ndarray:
     for name, (low, high) in classes.windows.items():
         names[(mass > low) & (mass < high)] = name
     return names
+
+
+def class_names(classes: Classes) -> list[str]:
+    """The classes in the order of the moment arrays: the windows as in classes.yaml, then "rest"."""
+    return [*classes.windows, "rest"]
+
+
+def select(mass: np.ndarray, priority: np.ndarray, classes: Classes, keep: int) -> np.ndarray:
+    """Which pairs of a sample enter the classes: the `keep` pairs with a class of lowest priority.
+
+    mass: generated mass without edits, per event. Returns the class of each pair as `class_of` does, with "" for
+    the pairs left out. Stops if fewer than `keep` pairs have a class.
+    """
+    names = class_of(mass, classes)
+    has_class = np.flatnonzero(names != "")
+    if len(has_class) < keep:
+        raise ValueError(f"{len(has_class)} pairs have a class, events.keep asks for {keep}")
+    chosen = has_class[np.argsort(priority[has_class], kind="stable")[:keep]]
+    out = np.full(len(names), "", dtype=object)
+    out[chosen] = names[chosen]
+    return out

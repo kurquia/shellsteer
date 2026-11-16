@@ -12,6 +12,7 @@ events:
   dataset: validation_muon_pairs
   directions: 1040000               # events for the gradients and the steering vectors
   steering: 1040000                 # events we steer and generate
+  keep: 1000000                     # pairs of each sample that enter the classes: lowest priority, with a class
 
 # The Euler sampler that generates the events.
 sampler:

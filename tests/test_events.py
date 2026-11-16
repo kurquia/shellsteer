@@ -6,7 +6,7 @@ import torch
 
 import shellsteer.events as events_module
 from shellsteer.config import Classes, DatasetEntry, DatasetFiles
-from shellsteer.events import batches, class_of, edited_tokens, load_events, pair_mass, pair_slots
+from shellsteer.events import batches, class_of, edited_tokens, load_events, pair_mass, pair_slots, select
 from shellsteer.sampler import BATCH_KEYS
 
 DATA = Path(__file__).parent / "data"
@@ -135,3 +135,12 @@ def test_pair_mass():
     assert torch.allclose(m, torch.tensor([91.2, 1e-9 ** 0.5]))
     m.log().sum().backward()
     assert torch.isfinite(p4.grad).all()
+
+
+def test_select_keeps_the_lowest_priority_with_a_class():
+    classes = Classes(min_mass=0.3, windows={"Z": [81.19, 101.19]})
+    mass = np.array([91.0, 0.1, 50.0, 95.0, np.nan, 20.0])
+    priority = np.array([5, 0, 1, 2, 3, 4])
+    assert list(select(mass, priority, classes, 3)) == ["", "", "rest", "Z", "", "rest"]
+    with pytest.raises(ValueError, match="4 pairs have a class, events.keep asks for 5"):
+        select(mass, priority, classes, 5)

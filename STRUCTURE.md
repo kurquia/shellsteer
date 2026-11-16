@@ -29,7 +29,7 @@ src/<package>/
   sampler.py           Euler sampler with seeded noise
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
   events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
-  moments.py           per-class sums of the gradients
+  gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
   directions.py        fkt, lda, meandiff; per step or constant in time
   artifacts.py         steering vectors saved with their metadata
   metrics.py           R_60 and the selectivity curve over alpha
@@ -49,7 +49,7 @@ runs/<name>/
   config.yaml          the resolved config of the run
   events_directions.npz
   events_steering.npz
-  moments.npz
+  gradient_moments.npz
   xi.npz               steering vectors and their metadata
   generated/
     alpha_+1.0/        one folder per alpha; alpha_0.0 is the baseline

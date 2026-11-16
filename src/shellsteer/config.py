@@ -46,6 +46,7 @@ class Events(Section):
     dataset: str
     directions: int
     steering: int
+    keep: int
 
 
 class Sampler(Section):
@@ -104,6 +105,8 @@ class Config(Section):
             n = getattr(self.events, sample)
             if not 0 < n <= dataset.events:
                 raise ValueError(f"events.{sample}: need 0 < n <= {dataset.events} (events in the file), got {n}")
+            if self.events.keep > n:
+                raise ValueError(f"events.keep: {self.events.keep} is more than the {n} events of events.{sample}")
         windows = sorted(self.classes.windows.values())
         for lo, hi in windows:
             if not self.classes.min_mass <= lo < hi:
