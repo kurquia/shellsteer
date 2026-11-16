@@ -1,0 +1,45 @@
+# Paper Sec. 5: steering of the Z boson at block 1.
+
+name: main_z_block1
+network: shellflow                  # shellflow | shellflow-b | shellgatr
+classes: configs/classes.yaml
+target: Z
+
+# Which events, and how many. A builds the steering vectors, B is steered.
+events:
+  split: validation
+  pair: muon                        # muon | electron | tau | photon | jet | largeRjet
+  order_seed: 2030
+  n_A: 1040000
+  n_B: 1040000
+
+# The Euler sampler that generates the events.
+sampler:
+  steps: 200
+  batch_size: 8192
+  precision: float32
+
+# Gradients of log m of the pair with respect to the residual stream, on events A.
+gradients:
+  blocks: [0, 1, 2, 3, 4, 5]
+  seed: 2040
+
+# Steering vectors from the class moments of the gradients.
+directions:
+  method: fkt                       # fkt | lda | meandiff
+  in_time: per_step                 # per_step | constant
+  balance: equal                    # equal | by_count
+
+# The edit h_L -> h_L + alpha xi(t), on events B.
+steering:
+  block: 1
+  alphas: [-2, -1, 1, 2]            # alpha = 0 always runs as the baseline
+  tokens: pair                      # pair | minus | plus | all_of_type
+  steps: all                        # all | [first, last]
+  norm_restore: false
+  seeds: [2041]
+
+# Histograms and the selectivity metric of the generated spectra.
+readout:
+  r60_max_mass: 60
+  spectrum_bins: 200

@@ -1,0 +1,9 @@
+# Classes of pairs by the invariant mass the network generates without edits, in GeV (paper Table 1).
+# Windows are open intervals. Pairs above min_mass outside every window form the class "rest".
+
+min_mass: 0.3
+
+windows:
+  Z: [81.19, 101.19]
+  Jpsi: [2.9, 3.3]
+  Upsilon: [9.2, 10.6]
