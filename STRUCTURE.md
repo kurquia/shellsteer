@@ -33,11 +33,12 @@ src/<package>/
   steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with their metadata
   steered_generation.py  the edit at a block; generation of the pairs, steered or baseline; files per seed and alpha
   lineshape.py         the paper's fit of the Z lineshape: pole M and width Gamma of a mass spectrum
+  luminosity.py        writes the luminosity table from the NNPDF4.0 grid file: python -m shellsteer.luminosity
   metrics.py           R_60, the shift of the target, and the selectivity curve over alpha
   plots.py             steered spectrum with ratio panel and zooms, selectivity curve, pole and width against alpha
   paper.mplstyle       the paper's figure style, applied only inside plots.py
   data/
-    luminosity_nnpdf40_13tev.csv  quark luminosities with the muon acceptance, read by lineshape.py
+    luminosity_nnpdf40_13tev.csv  quark luminosities with the muon acceptance, written by luminosity.py
 tests/
   test_config.py       the paper config loads; each bad value stops with its message
   test_networks.py     the network loads from Hugging Face, frozen
@@ -48,6 +49,7 @@ tests/
   test_steering_vectors.py  FKT on a toy problem with a known answer; save and load round trip
   test_steered_generation.py  alpha = 0 is the baseline; the batches equal a loop by hand; save and load
   test_lineshape.py    the paper's baseline histogram refits to the paper's pole and width
+  test_luminosity.py   the grid reader and the integral on a grid with a known answer; the csv round trip
   test_metrics.py      R_60 and the target shift on spectra with known answers
   test_plots.py        each figure draws its panels and lines; bad inputs stop
   test_gpu.py          the paper's baseline and sums on a CUDA GPU; skipped without one

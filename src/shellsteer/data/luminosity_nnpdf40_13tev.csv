@@ -1,14 +1,14 @@
 # Quark-antiquark luminosity of the up-type quarks (u, c) and of the down-type quarks (d, s, b), times the acceptance
 # of the muon selection, against the mass m of the pair. The lineshape fit of the Z peak reads it (paper App. E,
 # Eq. 50; shellsteer/lineshape.py).
-# PDF set: NNPDF4.0 NLO (NNPDF40_nlo_as_01180), central member 0, from its LHAPDF grid. Scale of the distributions: m.
-# Collision energy: sqrt(s) = 13 TeV.
+# LHAPDF grid file: NNPDF40_nlo_as_01180_0000.dat. Scale of the distributions: m. Collision energy: sqrt(s) = 13 TeV.
 # L_t(m) = sum over q in t of 2 int_0^2.5 dy [f_q(x1) f_qbar(x2) + f_qbar(x1) f_q(x2)] a(m, y),
-# with x1,2 = (m / sqrt(s)) e^(+-y), by the midpoint rule with 2500 points in y. a(m, y) is the acceptance of
-# |eta| < 2.5 and pT > 7 GeV for a pair without transverse momentum and a 1 + cos^2 theta distribution of the muons.
-# 401 masses, equally spaced in log m from 20 to 320 GeV. Arbitrary common unit: the fit uses only ratios.
-# Made on 2026-10-05 by scripts/lineshape_luminosity_table.py of the paper's analysis code. That table also has the
-# luminosities without the acceptance. The fit does not read them, so they are left out here.
+# with x1,2 = (m / sqrt(s)) e^(+-y), by the midpoint rule with 2500 points in y.
+# a(m, y) is the acceptance of |eta| < 2.5 and pT > 7 GeV for a pair without transverse momentum and a
+# 1 + cos^2 theta distribution of the muons.
+# 401 masses from 20 to 320 GeV, equally spaced in log m.
+# Arbitrary common unit: the fit uses only ratios.
+# Written by python -m shellsteer.luminosity (shellsteer/luminosity.py).
 mass_gev,L_up,L_down
 20.000000,2.968371149e+06,4.019811684e+06
 20.139111,2.944321088e+06,3.986627528e+06

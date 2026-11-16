@@ -7,10 +7,11 @@ The model is the number of pairs per unit log m. Its Born part (paper Eq. 50) is
 
 with the sum over the up-type and the down-type quarks. A_0,q is the bracket of Eq. 45: a photon, an interference,
 and a Z term, with sin^2 theta_W fixed. L_q is the quark-antiquark luminosity times the acceptance of the muon
-selection, from the package table data/luminosity_nnpdf40_13tev.csv (NNPDF4.0 NLO, 13 TeV). The Born density is
-folded with the radiator function F(y) of the final-state radiation (Eq. 52), whose exponent b follows the pole
-(Eq. 53), and then with a Gaussian in log m of standard deviation sigma_det / M (Eq. 51). Both folds of Eq. 54 are
-discrete convolutions on a grid in log m from 25 to 320 GeV with a step of 1e-3.
+selection, from the package table data/luminosity_nnpdf40_13tev.csv (NNPDF4.0 NLO, 13 TeV), which luminosity.py
+writes from the LHAPDF grid file. The Born density is folded with the radiator function F(y) of the final-state
+radiation (Eq. 52), whose exponent b follows the pole (Eq. 53), and then with a Gaussian in log m of standard
+deviation sigma_det / M (Eq. 51). Both folds of Eq. 54 are discrete convolutions on a grid in log m from 25
+to 320 GeV with a step of 1e-3.
 
 The fit (App. E.1) minimises the Poisson deviance D of the counts in bins of equal width in log m (Eq. 55) over five
 free parameters: the pole M, the width Gamma, the resolution sigma_det, the luminosity exponent rho, and log Y. It
