@@ -1,7 +1,7 @@
 """Which events the pipeline uses, and which tokens of each event it edits.
 
 An event here is its conditioning: the type, charge, extra features, and mask of each particle, and the missing
-momentum. The network generates the kinematics. Each dataset in datasets.yaml holds two samples of events with
+momentum. The network generates the kinematics; `pair_mass` reads the mass of the pair from them. Each dataset in datasets.yaml holds two samples of events with
 exactly one pair of the dataset's type, one negative and one positive particle:
 
     directions: the events for the gradients and the steering vectors.
@@ -78,9 +78,9 @@ def pair_slots(batch: dict[str, torch.Tensor], pair: str) -> tuple[torch.Tensor,
     return negative.int().argmax(1), positive.int().argmax(1)
 
 
-def token_masks(batch: dict[str, torch.Tensor], minus: torch.Tensor, plus: torch.Tensor, pair: str,
-                tokens: Literal["pair", "minus", "plus", "all_of_type"]) -> tuple[torch.Tensor, torch.Tensor]:
-    """(B, N) masks of the tokens that Steer edits with xi^- and with xi^+.
+def edited_tokens(batch: dict[str, torch.Tensor], minus: torch.Tensor, plus: torch.Tensor, pair: str,
+                  tokens: Literal["pair", "minus", "plus", "all_of_type"]) -> tuple[torch.Tensor, torch.Tensor]:
+    """edit_minus, edit_plus: (B, N), True on the tokens that Steer edits with xi^- and with xi^+.
 
     pair: the two particles of the pair. minus, plus: one of them. all_of_type: every particle of the pair's type,
     negative ones with xi^-, positive ones with xi^+.
@@ -98,6 +98,17 @@ def token_masks(batch: dict[str, torch.Tensor], minus: torch.Tensor, plus: torch
         of_type = (batch["particle_mask"] > 0.5) & (batch["particle_type"] == PAIR_TYPES[pair])
         return of_type & (batch["particle_charge"] == NEGATIVE), of_type & (batch["particle_charge"] == POSITIVE)
     raise ValueError(f"tokens: {tokens!r} is not pair, minus, plus, or all_of_type")
+
+
+def pair_mass(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
+    """(B,) invariant mass of the pair in GeV, from the four-momenta (px, py, pz, E) that `generate` returns.
+
+    m^2 = (E^- + E^+)^2 - |p^- + p^+|^2, floored at 1e-9 GeV^2 as in the paper, so that the square root and the
+    gradient of log m stay finite.
+    """
+    rows = torch.arange(len(minus), device=p4.device)
+    total = p4[rows, minus] + p4[rows, plus]
+    return (total[:, 3] ** 2 - (total[:, :3] ** 2).sum(1)).clamp(min=1e-9).sqrt()
 
 
 def batches(events: Events, batch_size: int, device: str | torch.device

@@ -6,7 +6,7 @@ import torch
 
 import shellsteer.events as events_module
 from shellsteer.config import Classes, DatasetEntry, DatasetFiles
-from shellsteer.events import batches, class_of, load_events, pair_slots, token_masks
+from shellsteer.events import batches, class_of, edited_tokens, load_events, pair_mass, pair_slots
 from shellsteer.sampler import BATCH_KEYS
 
 DATA = Path(__file__).parent / "data"
@@ -64,7 +64,7 @@ def test_no_electron_pairs_in_muon_events():
         pair_slots(batch32(), "electron")
 
 
-def test_token_masks():
+def test_edited_tokens():
     # one event: mu- in slot 1, mu+ in slot 3, another mu- in slot 4, a jet in slot 0, padding in slot 5
     batch = {"particle_type": torch.tensor([[1, 13, 0, 13, 13, 13]]),
              "particle_charge": torch.tensor([[1, 0, 1, 2, 0, 2]]),
@@ -74,7 +74,7 @@ def test_token_masks():
     expected = {"pair": (mask(1), mask(3)), "minus": (mask(1), mask()), "plus": (mask(), mask(3)),
                 "all_of_type": (mask(1, 4), mask(3))}
     for tokens, (want_minus, want_plus) in expected.items():
-        got_minus, got_plus = token_masks(batch, minus, plus, "muon", tokens)
+        got_minus, got_plus = edited_tokens(batch, minus, plus, "muon", tokens)
         assert torch.equal(got_minus, want_minus) and torch.equal(got_plus, want_plus), tokens
 
 
@@ -120,3 +120,18 @@ def test_class_of():
     classes = Classes(min_mass=0.3, windows={"Z": [81.19, 101.19], "Jpsi": [2.9, 3.3], "Upsilon": [9.2, 10.6]})
     mass = np.array([91.0, 81.19, 3.0, 9.5, 50.0, 0.3, 0.1, np.nan, np.inf, 200.0])
     assert list(class_of(mass, classes)) == ["Z", "rest", "Jpsi", "Upsilon", "rest", "", "", "", "", "rest"]
+
+
+def test_pair_mass():
+    # event 0: two muons back to back, 45.6 GeV each, in slots 2 and 0
+    # event 1: two massless particles along the same direction; m^2 = 0 hits the floor
+    p4 = torch.zeros(2, 3, 4)
+    p4[0, 2] = torch.tensor([0.0, 0.0, 45.6, 45.6])
+    p4[0, 0] = torch.tensor([0.0, 0.0, -45.6, 45.6])
+    p4[1, 0] = torch.tensor([3.0, 0.0, 0.0, 3.0])
+    p4[1, 1] = torch.tensor([5.0, 0.0, 0.0, 5.0])
+    p4.requires_grad_(True)
+    m = pair_mass(p4, torch.tensor([2, 0]), torch.tensor([0, 1]))
+    assert torch.allclose(m, torch.tensor([91.2, 1e-9 ** 0.5]))
+    m.log().sum().backward()
+    assert torch.isfinite(p4.grad).all()
