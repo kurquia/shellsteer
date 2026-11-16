@@ -17,6 +17,12 @@ class Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+class NetworkEntry(Section):
+    hf_repo: str
+    file: str
+    width: int
+
+
 class Classes(Section):
     min_mass: float
     windows: dict[str, list[float]]
@@ -64,6 +70,7 @@ class Readout(Section):
 class Config(Section):
     name: str
     network: Literal["shellflow"]
+    networks: dict[str, NetworkEntry]
     classes: Classes
     target: str
     events: Events
@@ -75,6 +82,8 @@ class Config(Section):
 
     @model_validator(mode="after")
     def check(self):
+        if self.network not in self.networks:
+            raise ValueError(f"network: {self.network!r} has no entry in the networks file")
         windows = sorted(self.classes.windows.values())
         for lo, hi in windows:
             if not self.classes.min_mass <= lo < hi:
@@ -96,8 +105,9 @@ class Config(Section):
 
 
 def load_config(path: str | Path) -> Config:
-    """Read the run config at `path` and the classes file it names (path relative to the run config)."""
+    """Read the run config at `path` and the networks and classes files it names (paths relative to the run config)."""
     path = Path(path)
     raw = yaml.safe_load(path.read_text())
+    raw["networks"] = yaml.safe_load((path.parent / raw["networks"]).read_text())
     raw["classes"] = yaml.safe_load((path.parent / raw["classes"]).read_text())
     return Config.model_validate(raw)

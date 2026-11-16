@@ -2,6 +2,7 @@
 
 name: main_z_block1
 network: shellflow
+networks: ../networks.yaml          # relative to this file
 classes: ../classes.yaml            # relative to this file
 target: Z
 

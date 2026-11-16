@@ -21,6 +21,7 @@ def test_main_config_loads():
 def write_variant(tmp_path, change):
     raw = yaml.safe_load(MAIN.read_text())
     raw["classes"] = str(MAIN.parent / raw["classes"])
+    raw["networks"] = str(MAIN.parent / raw["networks"])
     change(raw)
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -38,6 +39,7 @@ def write_variant(tmp_path, change):
         (lambda r: r["steering"].update(steps=[150, 100]), "first <= last"),
         (lambda r: r["steering"].update(norm_restore="no"), "valid boolean"),
         (lambda r: r.update(target="W"), "target"),
+        (lambda r: r.update(networks=str(MAIN.parent.parent / "classes.yaml")), "networks"),
         (lambda r: r["events"].update(pair="photon"), None),
     ],
 )
