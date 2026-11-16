@@ -2,7 +2,7 @@
 
 name: main_z_block1
 network: shellflow                  # shellflow | shellflow-b | shellgatr
-classes: configs/classes.yaml
+classes: ../classes.yaml            # relative to this file
 target: Z
 
 # Which events, and how many. A builds the steering vectors, B is steered.
