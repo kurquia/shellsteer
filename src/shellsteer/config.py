@@ -19,6 +19,7 @@ class Section(BaseModel):
 
 class NetworkEntry(Section):
     hf_repo: str
+    revision: str
     file: str
     width: int
 

@@ -23,7 +23,7 @@ class Network:
 
 def load_network(entry: NetworkEntry, device: str | torch.device) -> Network:
     """Download the network of `entry` from Hugging Face (or read the local cache) and load it onto `device`."""
-    path = hf_hub_download(entry.hf_repo, entry.file)
+    path = hf_hub_download(entry.hf_repo, entry.file, revision=entry.revision)
     module = RiemannianDiTsModule.load_from_checkpoint(path, map_location=device)
     if module.ema_model is None:
         raise ValueError(f"{path} has no EMA weights")
