@@ -18,15 +18,13 @@ from shellsteer.config import NetworkEntry
 
 @dataclass
 class Network:
-    name: str
     model: torch.nn.Module          # the EMA weights; this is what generates and what we steer
     module: RiemannianDiTsModule    # the Lightning module, for the sampler settings stored with it
-    checkpoint: Path
+    checkpoint: Path                # the file the weights came from
 
 
-def load_network(name: str, entry: NetworkEntry, device: str | torch.device,
-                 checkpoint: str | Path | None = None) -> Network:
-    """Load network `name` onto `device`. `checkpoint` replaces the Hugging Face download with a local file."""
+def load_network(entry: NetworkEntry, device: str | torch.device, checkpoint: str | Path | None = None) -> Network:
+    """Load the network of `entry` onto `device`. `checkpoint` replaces the Hugging Face download with a local file."""
     path = Path(checkpoint) if checkpoint is not None else Path(hf_hub_download(entry.hf_repo, entry.file))
     module = RiemannianDiTsModule.load_from_checkpoint(path, map_location=device)
     if module.ema_model is None:
@@ -35,5 +33,5 @@ def load_network(name: str, entry: NetworkEntry, device: str | torch.device,
     model = module.ema_model
 
     if model.d_model != entry.width:
-        raise ValueError(f"{name}: networks.yaml says width {entry.width}, the checkpoint has {model.d_model}")
-    return Network(name=name, model=model, module=module, checkpoint=path)
+        raise ValueError(f"{path}: networks.yaml says width {entry.width}, the checkpoint has {model.d_model}")
+    return Network(model=model, module=module, checkpoint=path)

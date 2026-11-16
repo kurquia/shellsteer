@@ -111,3 +111,9 @@ def load_config(path: str | Path) -> Config:
     raw["networks"] = yaml.safe_load((path.parent / raw["networks"]).read_text())
     raw["classes"] = yaml.safe_load((path.parent / raw["classes"]).read_text())
     return Config.model_validate(raw)
+
+
+def read_networks(path: str | Path) -> dict[str, NetworkEntry]:
+    """Read a networks file on its own, for example in a notebook: network name -> entry."""
+    raw = yaml.safe_load(Path(path).read_text())
+    return {name: NetworkEntry.model_validate(entry) for name, entry in raw.items()}
