@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "shellflow",
     "huggingface-hub>=0.26",
+    "matplotlib>=3.8",
 ]
 
 [dependency-groups]

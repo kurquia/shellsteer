@@ -1,0 +1,37 @@
+# Style of the paper's figures, applied by plots.py with matplotlib.style.context. Copied from the paper's
+# paper/figures/paper.mplstyle. Every size is the printed size: plots.py draws each figure at the width at which the
+# paper includes it. The line widths of curves and histograms, and the shorter minor ticks of log axes, are constants
+# in plots.py, because a style file cannot tell a histogram or a log axis apart.
+
+font.family:              serif
+font.serif:               cmr10, Computer Modern Roman, DejaVu Serif
+mathtext.fontset:         cm
+axes.formatter.use_mathtext: True
+axes.unicode_minus:       False
+
+font.size:                8
+axes.labelsize:           8
+axes.titlesize:           8
+xtick.labelsize:          7
+ytick.labelsize:          7
+legend.fontsize:          7
+legend.title_fontsize:    7
+legend.frameon:           False
+
+axes.linewidth:           0.6
+lines.linewidth:          1.25
+
+xtick.direction:          in
+ytick.direction:          in
+xtick.top:                True
+ytick.right:              True
+xtick.minor.visible:      True
+ytick.minor.visible:      True
+xtick.major.size:         3
+ytick.major.size:         3
+xtick.minor.size:         1.5
+ytick.minor.size:         1.5
+xtick.major.width:        0.5
+ytick.major.width:        0.5
+xtick.minor.width:        0.4
+ytick.minor.width:        0.4
