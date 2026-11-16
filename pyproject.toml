@@ -26,6 +26,7 @@ packages = ["src/shellsteer"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["gpu: needs a CUDA GPU (select with -m gpu)"]
 
 [tool.uv.sources]
 shellflow = { git = "https://github.com/pomidori/ShellFlow", rev = "2622c84" }
