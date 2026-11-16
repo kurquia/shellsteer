@@ -63,7 +63,7 @@ class Readout(Section):
 
 class Config(Section):
     name: str
-    network: Literal["shellflow", "shellflow-b", "shellgatr"]
+    network: Literal["shellflow"]
     classes: Classes
     target: str
     events: Events

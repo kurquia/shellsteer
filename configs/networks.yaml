@@ -7,13 +7,3 @@ shellflow:
   hf_repo: pomidori73/ShellFlow
   file: union_1LMET30_2to4lep/model.ckpt
   width: 128
-
-shellflow-b:
-  hf_repo: pomidori73/ShellFlow
-  file: shellflow_b_2to4lep/model.ckpt
-  width: 128
-
-shellgatr:
-  hf_repo: pomidori73/ShellFlow
-  file: shellgatr_2to4lep/model.ckpt
-  width: 224

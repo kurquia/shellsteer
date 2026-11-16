@@ -1,7 +1,7 @@
 # Paper Sec. 5: steering of the Z boson at block 1.
 
 name: main_z_block1
-network: shellflow                  # shellflow | shellflow-b | shellgatr
+network: shellflow
 classes: ../classes.yaml            # relative to this file
 target: Z
 
