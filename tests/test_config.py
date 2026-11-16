@@ -36,7 +36,7 @@ def write_variant(tmp_path, change):
     [
         (lambda r: r["steering"].update(blok=1), "Extra inputs"),
         (lambda r: r["steering"].pop("seeds"), "Field required"),
-        (lambda r: r["directions"].update(method="pca"), "Input should be"),
+        (lambda r: r["steering_vectors"].update(method="pca"), "Input should be"),
         (lambda r: r["steering"].update(alphas=[0, 1]), "leave out 0"),
         (lambda r: r["steering"].update(block=7), "not in gradients.blocks"),
         (lambda r: r["steering"].update(steps=[150, 100]), "first <= last"),

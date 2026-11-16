@@ -60,7 +60,7 @@ class Gradients(Section):
     seed: int
 
 
-class Directions(Section):
+class SteeringVectors(Section):
     method: Literal["fkt", "lda", "meandiff"]
     in_time: Literal["per_step", "constant"]
     balance: Literal["equal", "by_count"]
@@ -90,7 +90,7 @@ class Config(Section):
     events: Events
     sampler: Sampler
     gradients: Gradients
-    directions: Directions
+    steering_vectors: SteeringVectors
     steering: Steering
     readout: Readout
 

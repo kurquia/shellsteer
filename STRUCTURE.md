@@ -30,14 +30,12 @@ src/<package>/
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
   events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
-  directions.py        fkt, lda, meandiff; per step or constant in time
-  artifacts.py         steering vectors saved with their metadata
+  steering_vectors.py  fkt, lda, meandiff; per step or constant in time; saved with their metadata
   metrics.py           R_60 and the selectivity curve over alpha
   plots.py             spectrum with ratio panel, selectivity curve
 tests/
-  test_directions.py   FKT on a toy problem with a known answer
+  test_steering_vectors.py  FKT on a toy problem with a known answer; save and load round trip
   test_hooks.py        alpha = 0 reproduces the baseline bit for bit
-  test_artifacts.py    save and load round trip
 ```
 
 ## Outputs
@@ -50,7 +48,7 @@ runs/<name>/
   events_directions.npz
   events_steering.npz
   gradient_moments.npz
-  xi.npz               steering vectors and their metadata
+  steering_vectors.npz steering vectors and their metadata
   generated/
     alpha_+1.0/        one folder per alpha; alpha_0.0 is the baseline
   plots/

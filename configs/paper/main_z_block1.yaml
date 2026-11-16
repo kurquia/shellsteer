@@ -26,7 +26,7 @@ gradients:
   seed: 2040
 
 # Steering vectors from the class moments of the gradients.
-directions:
+steering_vectors:
   method: fkt                       # fkt | lda | meandiff
   in_time: per_step                 # per_step | constant
   balance: equal                    # equal | by_count
