@@ -6,8 +6,7 @@ import torch
 
 import shellsteer.events as events_module
 from shellsteer.config import Classes, DatasetEntry, DatasetFiles
-from shellsteer.events import batches, class_of, edited_tokens, load_events, pair_mass, pair_slots, select
-from shellsteer.sampler import BATCH_KEYS
+from shellsteer.events import BATCH_KEYS, batches, class_of, edited_tokens, load_events, pair_mass, pair_slots, select
 
 DATA = Path(__file__).parent / "data"
 

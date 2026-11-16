@@ -14,11 +14,11 @@ import torch
 import yaml
 
 from shellsteer.config import Classes, read_networks
-from shellsteer.events import Events, class_of, edited_tokens, log_pair_mass, pair_mass, pair_slots, select
-from shellsteer.gradients import baseline_mass, batch_seed, gradient_moments
+from shellsteer.events import BATCH_KEYS, Events, class_of, edited_tokens, log_pair_mass, pair_mass, pair_slots, select
+from shellsteer.gradients import baseline_mass, gradient_moments
 from shellsteer.hooks import Probe, Steer, attach, on_step
 from shellsteer.networks import load_network
-from shellsteer.sampler import BATCH_KEYS, generate, prior
+from shellsteer.sampler import batch_seed, generate, prior
 
 pytestmark = [pytest.mark.gpu, pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")]
 

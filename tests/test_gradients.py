@@ -6,11 +6,11 @@ import pytest
 import torch
 
 from shellsteer.config import Classes, read_networks
-from shellsteer.events import Events, log_pair_mass, pair_slots, select
-from shellsteer.gradients import baseline_mass, batch_seed, gradient_moments, load_moments, save_moments, unit
+from shellsteer.events import BATCH_KEYS, Events, log_pair_mass, pair_slots, select
+from shellsteer.gradients import baseline_mass, gradient_moments, load_moments, save_moments, unit
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import load_network
-from shellsteer.sampler import BATCH_KEYS, generate, prior
+from shellsteer.sampler import batch_seed, generate, prior
 
 DATA = Path(__file__).parent / "data"
 NETWORKS = Path(__file__).parent.parent / "configs" / "networks.yaml"

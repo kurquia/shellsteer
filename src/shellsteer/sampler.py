@@ -18,9 +18,10 @@ from shellflow.models.riemannian_DiTs_geometry import MASSLESS_TYPES, exp_map_sp
 
 from shellsteer.networks import Network
 
-# A batch holds the event skeleton: types, charges, extra features, mask, and missing momentum.
-# The network generates the kinematics; these keys only condition it.
-BATCH_KEYS = ("particle_type", "particle_charge", "particle_extra", "particle_mask", "met_vector")
+
+def batch_seed(seed: int, index: int) -> int:
+    """The noise seed of batch `index`: the paper's rule seed x 1,000,003 + batch index."""
+    return seed * 1_000_003 + index
 
 
 def prior(network: Network, batch: dict[str, torch.Tensor], seed: int) -> torch.Tensor:
@@ -59,7 +60,8 @@ def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tens
     """
     module, model = network.module, network.model
     if module.chart != "onshell" or module.direction_geometry != "S2":
-        raise ValueError(f"only the onshell chart on S2 is supported, got {module.chart} on {module.direction_geometry}")
+        raise ValueError(f"only the onshell chart on S2 is supported, "
+                         f"got {module.chart} on {module.direction_geometry}")
     if state.shape != (*batch["particle_type"].shape, 5):
         raise ValueError(f"state has shape {tuple(state.shape)}, expected {(*batch['particle_type'].shape, 5)}")
 

@@ -35,12 +35,7 @@ from shellsteer.events import (Events, batches, class_names, class_of, log_pair_
                               pair_mass_squared)
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import Network
-from shellsteer.sampler import generate, prior
-
-
-def batch_seed(seed: int, index: int) -> int:
-    """The noise seed of batch `index`: the paper's rule seed x 1,000,003 + batch index."""
-    return seed * 1_000_003 + index
+from shellsteer.sampler import batch_seed, generate, prior
 
 
 def baseline_mass(network: Network, events: Events, *, steps: int, batch_size: int, seed: int,

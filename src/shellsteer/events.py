@@ -1,8 +1,9 @@
 """Which events the pipeline uses, and which tokens of each event it edits.
 
 An event here is its conditioning: the type, charge, extra features, and mask of each particle, and the missing
-momentum. The network generates the kinematics; `pair_mass` reads the mass of the pair from them. Each dataset in datasets.yaml holds two samples of events with
-exactly one pair of the dataset's type, one negative and one positive particle:
+momentum. The network generates the kinematics; `pair_mass` reads the mass of the pair from them. Each dataset in
+datasets.yaml holds two samples of events with exactly one pair of the dataset's type, one negative and one positive
+particle:
 
     directions: the events for the gradients and the steering vectors.
     steering:   the events we steer and generate.
@@ -22,7 +23,10 @@ import torch
 from huggingface_hub import hf_hub_download
 
 from shellsteer.config import Classes, DatasetEntry
-from shellsteer.sampler import BATCH_KEYS
+
+# A batch holds the event skeleton: types, charges, extra features, mask, and missing momentum.
+# The network generates the kinematics; these keys only condition it.
+BATCH_KEYS = ("particle_type", "particle_charge", "particle_extra", "particle_mask", "met_vector")
 
 PAIR_TYPES = {"electron": 11, "muon": 13, "tau": 15}   # ShellFlow's PARTICLE_TYPE_CODES
 NEGATIVE, POSITIVE = 0, 2                               # ShellFlow stores charge + 1
