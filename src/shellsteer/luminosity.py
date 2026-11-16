@@ -1,19 +1,9 @@
-"""The table of quark-antiquark luminosities that the lineshape fit reads (paper App. E, Eq. 50).
+"""The luminosity table of the lineshape fit (paper App. E): the parton luminosity of Eq. 48 times the acceptance of
+the muon selection, for the up-type and the down-type quarks of Eq. 50, at 401 masses from 20 to 320 GeV.
 
-For the up-type quarks (u, c) and the down-type quarks (d, s, b), the table gives against the mass m of the pair
-
-    L_t(m) = sum over q in t of 2 int_0^2.5 dy [f_q(x1) f_qbar(x2) + f_qbar(x1) f_q(x2)] a(m, y),
-    x1,2 = (m / sqrt(s)) e^(+-y),
-
-with sqrt(s) = 13 TeV and the scale of the parton distributions f equal to m. a(m, y) is the acceptance of the
-muon selection, |eta| < 2.5 and pT > 7 GeV, for a pair without transverse momentum whose muons follow
-1 + cos^2 theta. The integral over y uses the midpoint rule with 2500 points. The unit is arbitrary: the fit uses only
-ratios of the luminosities.
-
-The parton distributions are those of NNPDF4.0 NLO, central member 0, read from its LHAPDF grid file. The file
-holds x f(x, Q) at fixed points in x and Q, in one or more subgrids in Q. Between the points, x f is a cubic spline
-in log x and log Q (scipy's RectBivariateSpline) of the subgrid that holds Q. This is the interpolation of the paper,
-not the one of the LHAPDF library.
+The integral runs over the rapidity of the pair, |Y| < 2.5, by the midpoint rule. The parton distributions are those
+of NNPDF4.0 NLO, central member 0, read from its LHAPDF grid file. Between the points of the grid, x f is a cubic
+spline in log x and log Q, as in the paper's analysis code, not the interpolation of the LHAPDF library.
 
 To write the table, download the set from LHAPDF, unpack it, and pass the file of member 0:
 
@@ -21,8 +11,6 @@ To write the table, download the set from LHAPDF, unpack it, and pass the file o
     tar xzf NNPDF40_nlo_as_01180.tar.gz
     python -m shellsteer.luminosity NNPDF40_nlo_as_01180/NNPDF40_nlo_as_01180_0000.dat \\
         src/shellsteer/data/luminosity_nnpdf40_13tev.csv
-
-It takes about a minute on one CPU.
 """
 
 from __future__ import annotations
@@ -99,17 +87,14 @@ class PartonDistributions:
 
 
 def acceptance(mass: float, y: np.ndarray) -> np.ndarray:
-    """(3/8) int from -c_max to c_max of (1 + c^2) dc: the share of the muon pairs at rapidity y that pass the cuts.
-
-    For a pair without transverse momentum, a muon at cos theta = c in the pair frame has |eta| < 2.5 if
-    |c| < tanh(2.5 - |y|) and pT > 7 GeV if |c| < sqrt(1 - 4 (7 GeV)^2 / m^2).
-    """
+    """The share of the pairs of mass `mass` and rapidity y whose two muons pass |eta| < 2.5 and pT > 7 GeV, for a pair
+    without transverse momentum and muons distributed as 1 + cos^2 theta."""
     c_max = np.minimum(np.tanh(np.clip(ETA_MAX - np.abs(y), 0, None)), np.sqrt(max(1 - 4 * PT_MIN ** 2 / mass ** 2, 0)))
     return 0.375 * 2 * (c_max + c_max ** 3 / 3)
 
 
 def luminosity(partons: PartonDistributions, quarks: tuple[int, ...], mass: float) -> float:
-    """L_t(m) of the module docstring for the quarks `quarks`, at the mass `mass` in GeV."""
+    """The luminosity of Eq. 48 times the acceptance, summed over `quarks`, at the mass `mass` in GeV."""
     y = (np.arange(RAPIDITY_POINTS) + 0.5) * ETA_MAX / RAPIDITY_POINTS
     x1, x2 = mass / SQRT_S * np.exp(y), mass / SQRT_S * np.exp(-y)
     inside = x1 < 1                                     # f = 0 at x >= 1
@@ -130,22 +115,11 @@ def luminosity_table(partons: PartonDistributions, masses: np.ndarray = TABLE_MA
 
 
 def write_table(path: str | Path, table: dict[str, np.ndarray], grid: str | Path) -> None:
-    """Write the table as the csv that `lineshape.read_luminosity_table` reads, with a header that says how."""
+    """Write the table as the csv that `lineshape.read_luminosity_table` reads."""
     masses = table["mass_gev"]
-    header = f"""\
-# Quark-antiquark luminosity of the up-type quarks (u, c) and of the down-type quarks (d, s, b), times the acceptance
-# of the muon selection, against the mass m of the pair. The lineshape fit of the Z peak reads it (paper App. E,
-# Eq. 50; shellsteer/lineshape.py).
-# LHAPDF grid file: {Path(grid).name}. Scale of the distributions: m. Collision energy: sqrt(s) = 13 TeV.
-# L_t(m) = sum over q in t of 2 int_0^2.5 dy [f_q(x1) f_qbar(x2) + f_qbar(x1) f_q(x2)] a(m, y),
-# with x1,2 = (m / sqrt(s)) e^(+-y), by the midpoint rule with {RAPIDITY_POINTS} points in y.
-# a(m, y) is the acceptance of |eta| < 2.5 and pT > 7 GeV for a pair without transverse momentum and a
-# 1 + cos^2 theta distribution of the muons.
-# {len(masses)} masses from {masses[0]:g} to {masses[-1]:g} GeV, equally spaced in log m.
-# Arbitrary common unit: the fit uses only ratios.
-# Written by python -m shellsteer.luminosity (shellsteer/luminosity.py).
-mass_gev,L_up,L_down
-"""
+    header = (f"# The luminosity table of the lineshape fit, from {Path(grid).name}.\n"
+              "# Written by python -m shellsteer.luminosity; see shellsteer/luminosity.py.\n"
+              "mass_gev,L_up,L_down\n")
     rows = "".join(f"{m:.6f},{up:.9e},{down:.9e}\n"
                    for m, up, down in zip(masses, table["L_up"], table["L_down"]))
     Path(path).write_text(header + rows)
