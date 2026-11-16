@@ -16,9 +16,10 @@ paper's sample), so the pass keeps per class c the sums the steering vectors nee
 and the same with the step-summed gradient G_p(L) = sum over k of g_p(L, k) in place of g_p(L, k), for steering
 vectors that are constant in time. All sums are in float64.
 
-The class of a pair comes from the mass the network generates without edits. `baseline_mass` generates it, and
-`events.select` keeps the `keep` pairs with a class of lowest priority. The gradient pass then runs on every event of
-the sample, so every batch has the noise of the baseline, and only the kept pairs enter a class.
+The class of a pair comes from the mass the network generates without edits. `steered_generation.generate_pairs`
+with no edit generates it, and `events.select` keeps the `keep` pairs with a class of lowest priority. The gradient
+pass then runs on every event of the sample, so every batch has the noise of the baseline, and only the kept pairs
+enter a class.
 """
 
 from __future__ import annotations
@@ -31,21 +32,10 @@ import numpy as np
 import torch
 
 from shellsteer.config import Classes
-from shellsteer.events import (Events, batches, class_names, class_of, log_pair_mass, pair_mass,
-                              pair_mass_squared)
+from shellsteer.events import Events, batches, class_names, class_of, log_pair_mass, pair_mass_squared
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import Network
 from shellsteer.sampler import batch_seed, generate, prior
-
-
-def baseline_mass(network: Network, events: Events, *, steps: int, batch_size: int, seed: int,
-                  device: str | torch.device) -> np.ndarray:
-    """(E,) mass of the pair of every event, generated without edits, in GeV."""
-    masses = []
-    for index, batch, minus, plus in batches(events, batch_size, device):
-        p4 = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps)
-        masses.append(pair_mass(p4, minus, plus).double().cpu().numpy())
-    return np.concatenate(masses)
 
 
 def unit(x: torch.Tensor) -> torch.Tensor:

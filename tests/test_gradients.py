@@ -7,10 +7,11 @@ import torch
 
 from shellsteer.config import Classes, read_networks
 from shellsteer.events import BATCH_KEYS, Events, log_pair_mass, pair_slots, select
-from shellsteer.gradients import baseline_mass, gradient_moments, load_moments, save_moments, unit
+from shellsteer.gradients import gradient_moments, load_moments, save_moments, unit
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import load_network
 from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.steered_generation import generate_pairs
 
 DATA = Path(__file__).parent / "data"
 NETWORKS = Path(__file__).parent.parent / "configs" / "networks.yaml"
@@ -52,7 +53,7 @@ def per_pair_gradients(network, events, blocks, steps, batch_size, seed):
 def test_moments_equal_the_sums_of_the_per_pair_gradients(network, events):
     """Two batches, two blocks, four steps; classes from wide windows so that every class has pairs."""
     steps, blocks, batch_size, seed = 4, [1, 3], 20, 7
-    mass = baseline_mass(network, events, steps=steps, batch_size=batch_size, seed=seed, device="cpu")
+    mass = generate_pairs(network, events, None, steps=steps, batch_size=batch_size, seed=seed, device="cpu").mass
     edges = np.quantile(mass, [0.2, 0.45, 0.55, 0.8])
     classes = Classes(min_mass=float(min(mass.min(), edges[0])) - 1e-3,
                       windows={"low": [float(edges[0]), float(edges[1])], "high": [float(edges[2]), float(edges[3])]})

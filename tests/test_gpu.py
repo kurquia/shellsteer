@@ -1,8 +1,7 @@
 """Tests on a CUDA GPU. They skip on a machine without one; select them with `pytest -m gpu`.
 
-Fixture A_batch0_seed2040_steps200.npz: the first 8192 events of the paper's directions sample (subset A of the 1M
-rerun, rows 0-8191 of A/generation_ungated/conditioning_all.npz), their pair slots, and the paper's baseline mass of
-each pair (A/ladder/gen_baseline_z.npz, batch 0, seed 2040, 200 steps, float32, no TF32, no torch.compile).
+Fixture A_batch0_seed2040_steps200.npz: the first 8192 events of the paper's directions sample, their pair slots,
+and the paper's baseline mass of each pair (batch 0, seed 2040, 200 steps, float32, no TF32, no torch.compile).
 """
 
 from contextlib import ExitStack
@@ -15,10 +14,11 @@ import yaml
 
 from shellsteer.config import Classes, read_networks
 from shellsteer.events import BATCH_KEYS, Events, class_of, edited_tokens, log_pair_mass, pair_mass, pair_slots, select
-from shellsteer.gradients import baseline_mass, gradient_moments
+from shellsteer.gradients import gradient_moments
 from shellsteer.hooks import Probe, Steer, attach, on_step
 from shellsteer.networks import load_network
 from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.steered_generation import generate_pairs
 
 pytestmark = [pytest.mark.gpu, pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")]
 
@@ -57,7 +57,8 @@ def test_baseline_mass_equals_the_paper(network, stored):
     events = make_events(stored, 8192)
     assert np.array_equal(events.minus.numpy(), stored["index_negative"])
     assert np.array_equal(events.plus.numpy(), stored["index_positive"])
-    mass = baseline_mass(network, events, steps=STEPS, batch_size=8192, seed=SEED, device="cuda").astype(np.float32)
+    mass = generate_pairs(network, events, None, steps=STEPS, batch_size=8192, seed=SEED, device="cuda").mass
+    mass = mass.astype(np.float32)
     paper = stored["mass"]
     differ = mass != paper
     largest = float(np.max(np.abs(mass - paper) / paper))
@@ -88,7 +89,7 @@ def test_moments_equal_the_sums_of_the_per_pair_gradients(network, stored):
     """512 pairs in two batches, all six blocks, 200 steps, the paper's classes."""
     events, batch_size, keep = make_events(stored, 512), 256, 400
     classes = Classes.model_validate(yaml.safe_load((CONFIGS / "classes.yaml").read_text()))
-    mass = baseline_mass(network, events, steps=STEPS, batch_size=batch_size, seed=SEED, device="cuda")
+    mass = generate_pairs(network, events, None, steps=STEPS, batch_size=batch_size, seed=SEED, device="cuda").mass
     kept = select(mass, events.priority, classes, keep)
     moments = gradient_moments(network, events, kept, classes, blocks=BLOCKS, steps=STEPS, batch_size=batch_size,
                                seed=SEED, device="cuda")
