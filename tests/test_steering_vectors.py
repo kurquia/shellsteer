@@ -5,8 +5,8 @@ import pytest
 import scipy.linalg
 import torch
 
-from shellsteer.steering_vectors import (load_steering_vector, others_weights, save_steering_vectors, steering_vector,
-                                         steering_vectors)
+from shellsteer.steering_vectors import (gradient_response, load_steering_vector, others_weights, save_steering_vectors,
+                                         steering_vector, steering_vectors)
 
 CLASSES = ["Z", "Jpsi", "rest"]
 
@@ -171,3 +171,49 @@ def test_raw_mean_orthogonal_to_xi_stops():
     moments = diagonal_moments([0.1, 0.1, 0.7, 0.1], [0.25, 0.25, 0.25, 0.25], raw_mean=[1.0, 0.0, 0.0, 0.0])
     with pytest.raises(ValueError, match="orthogonal to xi at step 0"):
         steering_vector(moments, "Z", 0, "fkt", "per_step", "equal")
+
+
+def test_gradient_response_sums_the_class_mean_gradient_times_xi_over_steps():
+    moments = toy_moments()
+    xi = steering_vector(moments, "Jpsi", 3, "fkt", "per_step", "equal")
+    mean = moments["raw sum"][1, 1] / moments["count"][1]                  # block 3 is the second block
+    expected = sum(mean[k] @ xi[k].reshape(-1) for k in range(5))
+    assert gradient_response(moments, xi, "Jpsi", 3) == pytest.approx(expected, rel=1e-14)
+    assert gradient_response(moments, torch.from_numpy(xi), "Jpsi", 3) == pytest.approx(expected, rel=1e-14)
+    reordered = {**moments, "blocks": np.array([3, 1]), "raw sum": moments["raw sum"][:, ::-1]}
+    assert gradient_response(reordered, xi, "Jpsi", 3) == pytest.approx(expected, rel=1e-14)
+
+
+def test_gradient_response_reads_the_negative_token_first():
+    moments = diagonal_moments([0.1, 0.1, 0.7, 0.1], [0.25] * 4, raw_mean=[0.5, 0.0, -2.0, 0.0])
+    negative, positive = np.array([[[1.0, 0.0], [0.0, 0.0]]]), np.array([[[0.0, 0.0], [1.0, 0.0]]])
+    assert gradient_response(moments, negative, "Z", 0) == pytest.approx(0.5)
+    assert gradient_response(moments, positive, "Z", 0) == pytest.approx(-2.0)
+
+
+def test_gradient_response_with_a_saved_steering_vector(tmp_path):
+    moments = toy_moments()
+    path = tmp_path / "steering_vectors.npz"
+    save_steering_vectors(path, steering_vectors(moments, "fkt", "per_step", "equal"), moments["classes"],
+                          moments["blocks"], {})
+    xi = load_steering_vector(path, "Z", 1)
+    assert gradient_response(moments, xi, "Z", 1) > 0                      # the sign of xi makes every term positive
+
+
+def test_gradient_response_stops_on_bad_inputs():
+    moments = toy_moments()
+    xi = steering_vector(moments, "Z", 1, "fkt", "per_step", "equal")
+    with pytest.raises(ValueError, match="target: 'W' is not one of the classes"):
+        gradient_response(moments, xi, "W", 1)
+    with pytest.raises(ValueError, match="block: 2 is not one of the blocks \\[1, 3\\]"):
+        gradient_response(moments, xi, "Z", 2)
+    with pytest.raises(ValueError, match="count: no pairs in class 'Z'"):
+        gradient_response({**moments, "count": np.array([0, 300, 900])}, xi, "Z", 1)
+    with pytest.raises(ValueError, match="xi has shape \\(4, 2, 3\\), expected \\(steps, 2, width\\) = \\(5, 2, 3\\)"):
+        gradient_response(moments, xi[1:], "Z", 1)
+    with pytest.raises(ValueError, match="xi has shape \\(5, 6\\)"):
+        gradient_response(moments, xi.reshape(5, 6), "Z", 1)
+    bad = xi.copy()
+    bad[2, 0, 1] = np.nan
+    with pytest.raises(ValueError, match="non-finite entry"):
+        gradient_response(moments, bad, "Z", 1)

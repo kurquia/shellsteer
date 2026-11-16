@@ -149,6 +149,36 @@ def save_steering_vectors(path: str | Path, vectors: np.ndarray, classes: np.nda
                       "metadata": np.array(json.dumps(metadata, indent=1))})
 
 
+def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str, block: int) -> float:
+    """Sum over the Euler steps of the gradient response, sum over k of S_C(t_k) (paper Eq. 21).
+
+    S_C(t_k) = G_C(t_k)^T xi(t_k), with G_C(t_k) = raw sum[C, block, k] / count[C] the mean of the raw gradients of
+    log m over the pairs of class C. To first order in alpha, the pole moves as M(alpha) = M(0) exp(alpha S), with
+    S this sum. The paper's value for the Z at block 1 is 0.122.
+
+    moments: the sums of gradients.py. xi: (steps, 2, width) steering vector, negative token first, as from
+    `load_steering_vector`; the raw sums hold the two tokens side by side in the same order.
+    """
+    names = [str(name) for name in moments["classes"]]
+    blocks = [int(b) for b in moments["blocks"]]
+    if target not in names:
+        raise ValueError(f"target: {target!r} is not one of the classes {names} of the moments")
+    if block not in blocks:
+        raise ValueError(f"block: {block} is not one of the blocks {blocks} of the moments")
+    c, b = names.index(target), blocks.index(block)
+    count = int(moments["count"][c])
+    if count == 0:
+        raise ValueError(f"count: no pairs in class {target!r}")
+    raw_sum = np.asarray(moments["raw sum"][c, b], dtype=np.float64)        # (steps, 2 width)
+    xi = np.asarray(xi, dtype=np.float64)
+    if xi.ndim != 3 or xi.shape[1] != 2 or (xi.shape[0], 2 * xi.shape[2]) != raw_sum.shape:
+        raise ValueError(f"xi has shape {xi.shape}, expected (steps, 2, width) = ({raw_sum.shape[0]}, 2, "
+                         f"{raw_sum.shape[1] // 2}) to match the moments")
+    if not (np.isfinite(xi).all() and np.isfinite(raw_sum).all()):
+        raise ValueError(f"xi or the raw sum of class {target!r} at block {block} has a non-finite entry")
+    return float(np.einsum("kw,kw->", raw_sum, xi.reshape(len(xi), -1)) / count)
+
+
 def load_steering_vector(path: str | Path, target: str, block: int) -> torch.Tensor:
     """(steps, 2, width) float32 steering vector of class `target` at `block`, for `hooks.Steer`."""
     with np.load(path) as data:

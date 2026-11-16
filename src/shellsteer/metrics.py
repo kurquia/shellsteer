@@ -22,6 +22,13 @@ with both medians over the same pairs: those whose baseline mass of this seed is
 
 The selectivity curve gives, for each alpha, the mean and the standard deviation over seeds of the target shift and
 of R_60. Steering vectors from different methods then compare at the same target shift (paper App. B.1).
+
+The response fits test the first-order prediction of the steering (paper Sec. 5.2). The pole fit takes the fitted
+pole M of each alpha, the mean over seeds, and fits M(alpha) = M(0) exp(alpha S) (Eq. 21). The pair fit takes the
+mass of each pair at each alpha and fits m_p(alpha) = m_p(0) exp(alpha S_p) (Eq. 20, App. D.3). The fitted slopes
+compare with the sum over k of S_C(t_k) from `steering_vectors.gradient_response`. Both R^2 are in GeV. The slopes
+follow the paper, which fits them in different spaces: the pole fit is linear in log M, the pair fit is least squares
+in GeV.
 """
 
 from __future__ import annotations
@@ -123,3 +130,112 @@ def selectivity_curve(seed: np.ndarray, alpha: np.ndarray, target_shifts: np.nda
     r60_table = r60_values[order].reshape(len(alphas), len(seeds))
     return {"alpha": alphas, "target shift": shifts.mean(1), "target shift std": shifts.std(1),
             "R_60": r60_table.mean(1), "R_60 std": r60_table.std(1)}
+
+
+def checked_alphas(alpha: np.ndarray, values: int) -> tuple[np.ndarray, np.ndarray]:
+    """alpha as (K,) float64 and the boolean mask of alpha != 0.
+
+    Stops unless there are `values` alphas, all finite and different, exactly one of them 0, and at least two others.
+    """
+    alpha = np.asarray(alpha, dtype=np.float64)
+    if alpha.ndim != 1 or len(alpha) != values:
+        raise ValueError(f"alpha: expected shape ({values},), one alpha per value, got {alpha.shape}")
+    if not np.isfinite(alpha).all():
+        raise ValueError(f"alpha: {int((~np.isfinite(alpha)).sum())} are not finite")
+    if len(np.unique(alpha)) != len(alpha):
+        raise ValueError(f"alpha: every alpha must appear once, got {sorted(alpha.tolist())}")
+    steered = alpha != 0
+    if steered.all():
+        raise ValueError("alpha: no alpha is 0; the fit needs the baseline")
+    if steered.sum() < 2:
+        raise ValueError(f"alpha: the fit needs at least two alphas other than 0, got {alpha[steered].tolist()}")
+    return alpha, steered
+
+
+def r_squared(observed: np.ndarray, predicted: np.ndarray) -> np.ndarray:
+    """1 - sum (observed - predicted)^2 / sum (observed - mean observed)^2 along the first axis."""
+    total = np.sum((observed - observed.mean(0)) ** 2, axis=0)
+    if np.any(total == 0):
+        raise ValueError(f"R^2 is undefined: {int(np.sum(total == 0))} series have the same value at every alpha")
+    return 1 - np.sum((observed - predicted) ** 2, axis=0) / total
+
+
+def pole_response_fit(alpha: np.ndarray, pole: np.ndarray) -> tuple[float, float]:
+    """S_fit and R^2 of the fit M(alpha) = M(0) exp(alpha S) of the fitted poles (paper Sec. 5.2, Eq. 21).
+
+    alpha: (K,) steering coefficients, one of them 0. pole: (K,) fitted pole M in GeV of each alpha; the one at
+    alpha = 0 is M(0), the baseline fit, and stays fixed. S is the least-squares slope of log(M(alpha) / M(0))
+    against alpha over the alphas other than 0, which has the closed form
+
+        S_fit = sum over alpha of alpha log(M(alpha) / M(0)) / sum over alpha of alpha^2.
+
+    R^2 compares M(alpha) with M(0) exp(alpha S_fit) in GeV over the same alphas. For the Z at block 1 the paper
+    fits -3 <= alpha <= 3 in steps of 0.5 and finds S_fit = 0.1255 and R^2 = 0.9998 (App. B.2: difference of means
+    0.9992, Fisher 0.979).
+    """
+    pole = np.asarray(pole, dtype=np.float64)
+    if pole.ndim != 1:
+        raise ValueError(f"pole: expected shape (alphas,), got {pole.shape}")
+    alpha, steered = checked_alphas(alpha, len(pole))
+    if not np.all(np.isfinite(pole) & (pole > 0)):
+        raise ValueError(f"pole: every pole must be finite and positive, got {pole.tolist()}")
+    a, baseline = alpha[steered], pole[~steered][0]
+    s = float(np.sum(a * np.log(pole[steered] / baseline)) / np.sum(a ** 2))
+    return s, float(r_squared(pole[steered], baseline * np.exp(a * s)))
+
+
+def pair_response_fit(alpha: np.ndarray, masses: np.ndarray, *, tolerance: float = 1e-12,
+                      max_iterations: int = 100) -> tuple[np.ndarray, np.ndarray]:
+    """S_p and R^2_p of the fit m_p(alpha) = m_p(0) exp(alpha S_p) of every pair (paper App. D.3, Eq. 20).
+
+    alpha: (K,) steering coefficients, one of them 0. masses: (K, pairs) mass of each pair in GeV at each alpha,
+    from the same noise; the row at alpha = 0 is m_p(0), the baseline, and stays fixed. As in the paper, S_p
+    minimises the sum of squares in GeV, sum over alpha of (m_p(alpha) - m_p(0) exp(alpha S_p))^2, and R^2_p is
+    computed in GeV over all K alphas, alpha = 0 included. The paper fits the Z pairs over -3 <= alpha <= 3 in steps
+    of 0.5 and finds a median R^2_p of 0.994.
+
+    The fit is not linear in S_p. It starts from the least-squares slope of log(m_p(alpha) / m_p(0)) and takes Newton
+    steps, or Gauss-Newton steps where the second derivative is not positive, halved while they increase the sum of
+    squares by more than its rounding. It stops once no step is larger than `tolerance` (1 + |S_p|). The paper took
+    30 Gauss-Newton steps, which leaves 0.04 % of its pairs short of the minimum: pairs whose mass leaves the Z at
+    large |alpha|.
+
+    Returns two (pairs,) arrays: S_p and R^2_p.
+    """
+    masses = np.asarray(masses, dtype=np.float64)
+    if masses.ndim != 2:
+        raise ValueError(f"masses: expected shape (alphas, pairs), got {masses.shape}")
+    alpha, steered = checked_alphas(alpha, len(masses))
+    bad = ~(np.isfinite(masses) & (masses > 0))
+    if bad.any():
+        first = np.argwhere(bad)[0]
+        raise ValueError(f"masses: {int(bad.sum())} are not finite and positive, the first at alpha "
+                         f"{alpha[first[0]]} and pair {int(first[1])}")
+    baseline = masses[~steered][0]
+    a = alpha[:, None]
+
+    def sum_of_squares(s: np.ndarray) -> np.ndarray:
+        return np.sum((masses - baseline * np.exp(a * s)) ** 2, axis=0)
+
+    s = np.sum(a * np.log(masses / baseline), axis=0) / np.sum(alpha ** 2)
+    for _ in range(max_iterations):
+        predicted = baseline * np.exp(a * s)
+        residual = masses - predicted
+        gradient = -np.sum(a * predicted * residual, axis=0)          # half the derivative of the sum of squares
+        gauss_newton = np.sum((a * predicted) ** 2, axis=0)
+        second = gauss_newton - np.sum(a ** 2 * predicted * residual, axis=0)
+        step = -gradient / np.where(second > 0, second, gauss_newton)
+        moving = np.abs(step) > tolerance * (1 + np.abs(s))
+        if not moving.any():
+            break
+        allowed = sum_of_squares(s) * (1 + 1e-12)                       # room for the rounding of the sum
+        for _ in range(60):
+            worse = moving & ~(sum_of_squares(s + step) <= allowed)
+            if not worse.any():
+                break
+            step[worse] /= 2
+        s = np.where(moving, s + step, s)
+    else:
+        raise ValueError(f"the fit did not converge in {max_iterations} iterations for {int(moving.sum())} pairs, "
+                         f"the first at pair {int(np.flatnonzero(moving)[0])}")
+    return s, r_squared(masses, baseline * np.exp(a * s))

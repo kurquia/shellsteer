@@ -17,12 +17,12 @@ from shellsteer.config import DatasetEntry, DatasetFiles, load_config
 from shellsteer.events import BATCH_KEYS, class_of, load_events, select
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
 from shellsteer.lineshape import fit_masses
-from shellsteer.metrics import log_bin_edges, r60, selectivity_curve, target_shift
+from shellsteer.metrics import log_bin_edges, pole_response_fit, r60, selectivity_curve, target_shift
 from shellsteer.networks import load_network
 from shellsteer.plots import pole_and_width_figure, save, selectivity_figure, steered_spectrum_figure
 from shellsteer.steered_generation import (Edit, generate_pairs, generated_path, kept_path, load_generated, load_kept,
                                            save_generated, save_kept)
-from shellsteer.steering_vectors import load_steering_vector, save_steering_vectors, steering_vectors
+from shellsteer.steering_vectors import gradient_response, load_steering_vector, save_steering_vectors, steering_vectors
 
 DATA = Path(__file__).parent / "data"
 MAIN = Path(__file__).parent.parent / "configs" / "paper" / "main_z_block1.yaml"
@@ -68,6 +68,8 @@ def test_a_run_from_the_events_to_the_figures(tmp_path, entry):
     xi = load_steering_vector(run / "steering_vectors.npz", config.target, BLOCK)
     assert xi.shape == (STEPS, 2, 128)
     assert np.allclose(xi.flatten(1).norm(dim=1).numpy(), 1.0)
+    first_order = gradient_response(moments, xi, config.target, BLOCK)
+    assert first_order > 0                                     # the sign of xi makes every step's term positive
 
     # Steered generation, on the steering sample: the kept pairs come from the first seed's baseline.
     steering = load_events(entry, "steering", EVENTS)
@@ -118,8 +120,12 @@ def test_a_run_from_the_events_to_the_figures(tmp_path, entry):
     assert np.all(curve["R_60"] >= 0)
     np.savez(run / "selectivity_curve.npz", **curve)
 
-    # The figures, from the last seed.
+    # The fit M(alpha) = M(0) exp(alpha S) of the seed-mean poles, against the first-order slope.
     alphas = sorted(poles)
+    s_fit, r2 = pole_response_fit(np.array(alphas), np.array([np.mean(poles[a]) for a in alphas]))
+    assert np.isfinite(s_fit) and r2 <= 1
+
+    # The figures, from the last seed.
     plots, figures = config.plots, run / "plots"
     figures.mkdir()
     save(steered_spectrum_figure(masses[0.0], {a: masses[a] for a in ALPHAS}, None, edges=edges,
@@ -132,7 +138,7 @@ def test_a_run_from_the_events_to_the_figures(tmp_path, entry):
          figures / "selectivity.pdf")
     save(pole_and_width_figure(alphas, [np.mean(poles[a]) for a in alphas], [np.std(poles[a]) for a in alphas],
                                [np.mean(widths[a]) for a in alphas], [np.std(widths[a]) for a in alphas],
-                               first_order_log_slope=None),
+                               first_order_log_slope=first_order),
          figures / "pole_and_width.pdf")
     assert sorted(path.name for path in figures.iterdir()) == ["pole_and_width.pdf", "selectivity.pdf",
                                                                "steered_spectrum.pdf"]
