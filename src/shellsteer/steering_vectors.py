@@ -13,7 +13,7 @@ fkt:      xi maximises xi^T Sigma_C xi / xi^T (Sigma_C + Sigma_C') xi (paper Eq.
           of M_FK^T Sigma_C M_FK. The paper's Sigma_C' is the sum over D != C of Sigma_D, which is (number of other
           classes) times the mixture here; the scale of Sigma_C' does not change xi. by_count gives the same xi as
           sums over pairs, every pair with the same weight.
-lda:      xi = (K_C + K_C')^(-1) (m_C - m_C'), with K = Sigma - m m^T the covariance of the unit gradients.
+fisher:   xi = (K_C + K_C')^(-1) (m_C - m_C'), with K = Sigma - m m^T the covariance of the unit gradients.
 meandiff: xi = m_C - m_C'.
 
 Every steering vector has unit length over both tokens. Its sign makes G_C(t_k)^T xi(t_k) > 0, with G_C the mean
@@ -31,7 +31,7 @@ import numpy as np
 import scipy.linalg
 import torch
 
-Method = Literal["fkt", "lda", "meandiff"]
+Method = Literal["fkt", "fisher", "meandiff"]
 InTime = Literal["per_step", "constant"]
 Balance = Literal["equal", "by_count"]
 
@@ -67,8 +67,8 @@ def fkt(second: np.ndarray, second_others: np.ndarray, where: str) -> np.ndarray
     return m_fk @ top[:, 0]
 
 
-def lda(mean: np.ndarray, second: np.ndarray, mean_others: np.ndarray, second_others: np.ndarray,
-        where: str) -> np.ndarray:
+def fisher(mean: np.ndarray, second: np.ndarray, mean_others: np.ndarray, second_others: np.ndarray,
+           where: str) -> np.ndarray:
     """(2 width,) (K_C + K_C')^(-1) (m_C - m_C'), with K = Sigma - m m^T."""
     covariance = second - np.outer(mean, mean) + second_others - np.outer(mean_others, mean_others)
     sigma, u = positive_definite_eigh(covariance, f"K_C + K_C' ({where})")
@@ -90,9 +90,9 @@ def direction(method: Method, second: np.ndarray, unit_sum: np.ndarray, count: n
     second_others = np.einsum("c,cvw->vw", weights, seconds)
     if method == "fkt":
         return fkt(seconds[target], second_others, where)
-    if method == "lda":
-        return lda(means[target], seconds[target], mean_others, second_others, where)
-    raise ValueError(f"method: {method!r} is not fkt, lda, or meandiff")
+    if method == "fisher":
+        return fisher(means[target], seconds[target], mean_others, second_others, where)
+    raise ValueError(f"method: {method!r} is not fkt, fisher, or meandiff")
 
 
 def steering_vector(moments: dict[str, np.ndarray], target: str, block: int, method: Method, in_time: InTime,

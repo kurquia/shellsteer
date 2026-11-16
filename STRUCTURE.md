@@ -15,7 +15,7 @@ configs/
   paper/
     main_z_block1.yaml   Sec. 5: Z, block 1, FKT
     ablation_z.yaml      Sec. 5.3: ablation of the steering vector
-    methods_z.yaml       App. B: LDA and difference of means
+    methods_z.yaml       App. B: Fisher and difference of means
     networks_z.yaml      App. C: ShellFlow-B and ShellGATr
     blocks_z.yaml        App. D: blocks 0 to 5
     quarkonia.yaml       App. D: J/psi and Upsilon
@@ -30,7 +30,7 @@ src/<package>/
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
   events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
-  steering_vectors.py  fkt, lda, meandiff; per step or constant in time; saved with their metadata
+  steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with their metadata
   metrics.py           R_60 and the selectivity curve over alpha
   plots.py             spectrum with ratio panel, selectivity curve
 tests/

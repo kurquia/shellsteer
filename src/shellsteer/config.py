@@ -61,7 +61,7 @@ class Gradients(Section):
 
 
 class SteeringVectors(Section):
-    method: Literal["fkt", "lda", "meandiff"]
+    method: Literal["fkt", "fisher", "meandiff"]
     in_time: Literal["per_step", "constant"]
     balance: Literal["equal", "by_count"]
 

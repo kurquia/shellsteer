@@ -27,7 +27,7 @@ gradients:
 
 # Steering vectors from the class moments of the gradients.
 steering_vectors:
-  method: fkt                       # fkt | lda | meandiff
+  method: fkt                       # fkt | fisher | meandiff
   in_time: per_step                 # per_step | constant
   balance: equal                    # equal | by_count
 

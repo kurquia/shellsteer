@@ -73,20 +73,20 @@ def test_fkt_solves_the_generalized_eigenproblem(balance):
         assert abs(xi[k].reshape(-1) @ expected) == pytest.approx(1, abs=1e-10)
 
 
-def test_lda_and_meandiff_formulas():
+def test_fisher_and_meandiff_formulas():
     moments = toy_moments()
     count, weights = moments["count"], np.array([0.5, 0.0, 0.5])
     second = moments["unit second moment"][:, 0, 2] / count[:, None, None]
     mean = moments["unit sum"][:, 0, 2] / count[:, None]
     mean_others, second_others = weights @ mean, np.einsum("c,cvw->vw", weights, second)
     covariance = second[1] - np.outer(mean[1], mean[1]) + second_others - np.outer(mean_others, mean_others)
-    expected = {"lda": np.linalg.solve(covariance, mean[1] - mean_others), "meandiff": mean[1] - mean_others}
+    expected = {"fisher": np.linalg.solve(covariance, mean[1] - mean_others), "meandiff": mean[1] - mean_others}
     for method, vector in expected.items():
         xi = steering_vector(moments, "Jpsi", 1, method, "per_step", "equal")[2].reshape(-1)
         assert abs(xi @ vector) / np.linalg.norm(vector) == pytest.approx(1, abs=1e-12), method
 
 
-@pytest.mark.parametrize("method", ["fkt", "lda", "meandiff"])
+@pytest.mark.parametrize("method", ["fkt", "fisher", "meandiff"])
 def test_unit_length_and_sign_at_every_step(method):
     moments = toy_moments()
     xi = steering_vector(moments, "Z", 1, method, "per_step", "equal")
@@ -105,7 +105,7 @@ def test_constant_is_one_vector_at_every_step():
 
 
 def test_by_count_differs_from_equal_only_when_counts_differ():
-    for method in ("fkt", "lda", "meandiff"):
+    for method in ("fkt", "fisher", "meandiff"):
         unequal = toy_moments(count=(40, 300, 900))
         a, b = (steering_vector(unequal, "Z", 1, method, "per_step", balance) for balance in ("equal", "by_count"))
         assert np.abs(np.einsum("kvw,kvw->k", a, b)).min() < 0.999, method
@@ -158,7 +158,7 @@ def test_bad_inputs_stop():
         steering_vector(moments, "Z", 1, "pca", "per_step", "equal")
 
 
-@pytest.mark.parametrize("method, matrix", [("fkt", "Sigma_C \\+ Sigma_C'"), ("lda", "K_C \\+ K_C'")])
+@pytest.mark.parametrize("method, matrix", [("fkt", "Sigma_C \\+ Sigma_C'"), ("fisher", "K_C \\+ K_C'")])
 def test_singular_moments_stop(method, matrix):
     """No class has a gradient along the last axis, so no matrix has a component there."""
     moments = diagonal_moments([0.2, 0.3, 0.5, 0.0], [0.3, 0.3, 0.4, 0.0], raw_mean=[1.0, 0, 0, 0])
