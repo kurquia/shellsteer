@@ -43,23 +43,30 @@ def on_step(*hooks) -> Callable[[int], None]:
     return set_steps
 
 
+def check_width(h: torch.Tensor, width: int, what: str) -> None:
+    if h.shape[-1] != width:
+        raise ValueError(f"{what} has width {width}, the residual stream of this block has width {h.shape[-1]}")
+
+
 class Probe:
     """Adds `delta[k]` to the two tokens of every pair at step k; `delta` is zero and records the gradient.
 
     minus, plus: (B,) slot of the negative and the positive particle of each pair.
-    After backward, delta.grad has shape (steps, B, 2, width), negative token first.
+    After backward, delta.grad has shape (steps, B, 2, width), negative token first; width is the network's.
     """
 
-    def __init__(self, steps: int, minus: torch.Tensor, plus: torch.Tensor, width: int) -> None:
+    def __init__(self, network: Network, steps: int, minus: torch.Tensor, plus: torch.Tensor) -> None:
         self.rows = torch.arange(len(minus), device=minus.device)
         self.minus, self.plus = minus, plus
-        self.delta = torch.zeros(steps, len(minus), 2, width, device=minus.device, requires_grad=True)
+        self.width = network.model.d_model
+        self.delta = torch.zeros(steps, len(minus), 2, self.width, device=minus.device, requires_grad=True)
         self.step = 0
 
     def set_step(self, k: int) -> None:
         self.step = k
 
     def __call__(self, h: torch.Tensor) -> torch.Tensor:
+        check_width(h, self.width, "the probe")
         d = self.delta[self.step].to(h.dtype)
         out = h.clone()
         out[self.rows, self.minus] = h[self.rows, self.minus] + d[:, 0]
@@ -94,6 +101,7 @@ class Steer:
         self.step = k
 
     def __call__(self, h: torch.Tensor) -> torch.Tensor:
+        check_width(h, self.xi.shape[-1], "xi")
         if self.steps is not None and not self.steps[0] <= self.step <= self.steps[1]:
             return h
         xi = self.xi[self.step].to(h.dtype)

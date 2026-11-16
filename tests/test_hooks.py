@@ -67,7 +67,7 @@ def test_steering_matches_the_paper_code(network, batch, slots):
 
 def test_probe_gradient_matches_the_paper_code(network, batch, slots):
     """Gradient of log m at block 1; reference from the paper's probe (z_only_read_gradients.Probe) on CPU."""
-    probe = Probe(STEPS, *slots, width=128)
+    probe = Probe(network, STEPS, *slots)
     with attach(network, 1, probe):
         events = generate(network, batch, prior(network, batch, SEED), STEPS, grad=True, on_step=on_step(probe))
         gradient, = torch.autograd.grad(log_mass(events, slots).sum(), probe.delta)
@@ -79,7 +79,7 @@ def test_probe_gradient_matches_finite_differences(network, batch, slots):
     """The probe gradient along a random direction at one step equals the change of log m when steering along it."""
     steps, k = 10, 6
     state = prior(network, batch, SEED)
-    probe = Probe(steps, *slots, width=128)
+    probe = Probe(network, steps, *slots)
     with attach(network, 1, probe):
         events = generate(network, batch, state, steps, grad=True, on_step=on_step(probe))
         gradient, = torch.autograd.grad(log_mass(events, slots).sum(), probe.delta)
@@ -113,3 +113,10 @@ def test_steer_refuses_overlapping_masks(slots):
     m, _ = pair_masks(slots)
     with pytest.raises(ValueError, match="both"):
         Steer(torch.zeros(STEPS, 2, 128), 1.0, m, m)
+
+
+def test_wrong_width_stops_with_a_clear_error(network, batch, slots):
+    steer = Steer(torch.zeros(STEPS, 2, 224), 1.0, *pair_masks(slots))
+    with pytest.raises(ValueError, match="xi has width 224, the residual stream of this block has width 128"):
+        with attach(network, 1, steer):
+            generate(network, batch, prior(network, batch, SEED), 2, on_step=steer.set_step)
