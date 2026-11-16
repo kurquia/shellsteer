@@ -1,21 +1,15 @@
-"""Steered generation (paper Sec. 5): generate the events of the steering sample with the edit of Eq. 8,
+"""Steered generation (paper Sec. 5): generate the events of the steering sample with the edit of Eq. 8, adding
+alpha xi(t_k) to the two muon tokens at the output of block L and at every Euler step k, and keep the mass and the
+four-momenta of each pair.
 
-    h_L^-(t_k) -> h_L^-(t_k) + alpha xi^-(t_k),    h_L^+(t_k) -> h_L^+(t_k) + alpha xi^+(t_k),
+The vector comes from `steering_vectors.load_steering_vector`, the events from
+`events.load_events(entry, "steering", n)`.
+Without an edit, `generate_pairs` attaches no hook and generates the baseline. Batch i starts from the noise of
+`sampler.batch_seed(seed, i)` for every alpha, so a steered pair has the noise of the same baseline pair.
 
-at the output of block L and at every Euler step k, and keep the mass and the four-momenta of each pair. h_L^- and
-h_L^+ are the tokens of the negative and the positive particle; in the paper they are the two muons of the pair.
-
-The steering vector xi comes from `steering_vectors.load_steering_vector`, the events from
-`events.load_events(entry, "steering", n)`. Without an edit, `generate_pairs` attaches no hook, so it generates the
-baseline exactly as the paper's baseline ran. Batch i starts from the noise of `sampler.batch_seed(seed, i)` for every
-alpha, so within a seed every steered pair starts from the same noise as the same pair of the baseline.
-
-Which pairs count: the paper keeps the 1,000,000 pairs (`events.keep`) of the steering sample that have a class and
-the lowest priority. The class comes from the baseline mass of the first seed (2041 in the paper), and the same pairs
-count for every seed and every alpha. `events.select` makes this choice once, on the baseline of the first seed;
-`save_kept` stores it.
-
-Each generation is one file:
+The class of each pair comes from the baseline mass of the first seed (2041 in the paper). `events.select` keeps the
+1,000,000 pairs with a class and the lowest priority once, and `save_kept` stores them; the same pairs count for every
+seed and alpha. Each generation is one file:
 
     <run>/generated/seed_<seed>/alpha_<alpha:+g>.npz    from generated_path(run, seed, alpha); the baseline is alpha_+0
     <run>/generated/kept.npz                            from kept_path(run): the class of each kept pair

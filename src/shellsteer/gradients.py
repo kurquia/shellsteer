@@ -1,25 +1,14 @@
-"""The gradients of log m of the pair with respect to the residual stream, summed by class.
+"""The gradients of log m of the pair with respect to the residual stream, summed by class (paper Sec. 4.1).
 
-For every pair p of the directions sample, every block L in the config, and every Euler step k, the gradient pass
-computes
+For every pair, block L, and Euler step k, one backward pass through a zero `Probe` per block gives the gradient on
+the two tokens of the pair, negative token first. The raw gradients do not fit on disk, so the pass keeps per class
+the sums the steering vectors need, in float64: "unit second moment" (sum of u u^T for the unit gradients u), "unit
+sum", "raw sum" (its direction fixes the sign), and "count". The same three sums of the step-summed gradient are
+under "step-summed ..." keys, for vectors that are constant in time.
 
-    g_p(L, k) = d log m_p / d h_L(t_k) on the two tokens of the pair, negative token first (2 x width entries),
-
-with one zero `Probe` per block and one backward pass. The raw gradients do not fit on disk (about 1.3 PB for the
-paper's sample), so the pass keeps per class c the sums the steering vectors need:
-
-    unit second moment[c, L, k] = sum over p in c of u u^T, u = g_p(L, k) / |g_p(L, k)|
-    unit sum[c, L, k]           = sum over p in c of u
-    raw sum[c, L, k]            = sum over p in c of g_p(L, k)            (its direction fixes the sign)
-    count[c]                    = pairs in c
-
-and the same with the step-summed gradient G_p(L) = sum over k of g_p(L, k) in place of g_p(L, k), for steering
-vectors that are constant in time. All sums are in float64.
-
-The class of a pair comes from the mass the network generates without edits. `steered_generation.generate_pairs`
-with no edit generates it, and `events.select` keeps the `keep` pairs with a class of lowest priority. The gradient
-pass then runs on every event of the sample, so every batch has the noise of the baseline, and only the kept pairs
-enter a class.
+The class of a pair comes from the mass the network generates without edits (`steered_generation.generate_pairs`,
+`events.select`). The pass runs on every event of the sample, so every batch has the noise of the baseline, and only
+the kept pairs enter a class.
 """
 
 from __future__ import annotations

@@ -1,24 +1,14 @@
 """The lineshape fit of the Z peak (paper App. E), which turns a spectrum of dimuon masses into a pole M and a width
 Gamma.
 
-The model is the number of pairs per unit log m. Its Born part (paper Eq. 50) is
+The model is the number of pairs per unit log m: the Born density (Eq. 50) with the quark luminosity times the
+acceptance of `data/luminosity_nnpdf40_13tev.csv` (written by luminosity.py), folded with the final-state radiation
+(Eq. 52, 53) and with a Gaussian resolution in log m (Eq. 51). Both folds (Eq. 54) are discrete convolutions on a
+grid in log m from 25 to 320 GeV with a step of 1e-3.
 
-    dN_Born / dlog m = Y (M / m)^rho sum_q [L_q(m) / (L_up(M) + L_down(M))] A_0,q(m^2),
-
-with the sum over the up-type and the down-type quarks. A_0,q is the bracket of Eq. 45: a photon, an interference,
-and a Z term, with sin^2 theta_W fixed. L_q is the quark-antiquark luminosity times the acceptance of the muon
-selection, from the package table data/luminosity_nnpdf40_13tev.csv (NNPDF4.0 NLO, 13 TeV), which luminosity.py
-writes from the LHAPDF grid file. The Born density is folded with the radiator function F(y) of the final-state
-radiation (Eq. 52), whose exponent b follows the pole (Eq. 53), and then with a Gaussian in log m of standard
-deviation sigma_det / M (Eq. 51). Both folds of Eq. 54 are discrete convolutions on a grid in log m from 25
-to 320 GeV with a step of 1e-3.
-
-The fit (App. E.1) minimises the Poisson deviance D of the counts in bins of equal width in log m (Eq. 55) over five
-free parameters: the pole M, the width Gamma, the resolution sigma_det, the luminosity exponent rho, and log Y. It
-starts from four points and keeps the smallest D. `fit_counts` fits one histogram. `fit_masses` takes the masses of
-a sample, centres the window on the peak, fits, centres the window on the fitted pole, and fits again.
-
-The masses, in GeV, are those of the baseline generation, of a steered generation, or of the real data.
+The fit (App. E.1) minimises the Poisson deviance (Eq. 55) over M, Gamma, the resolution, the luminosity exponent
+rho, and log Y, from four starting points. `fit_counts` fits one histogram. `fit_masses` fits the masses of a sample
+in GeV (baseline, steered, or real data) twice: with the window centred on the peak, then on the fitted pole.
 """
 
 from __future__ import annotations

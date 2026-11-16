@@ -1,34 +1,13 @@
 """How selective a steering is, from the generated masses of the pairs: R_60 and the target shift (paper Sec. 5).
 
-For each seed, the steering stage generates the kept pairs (`events.select`) without edits, which gives the baseline,
-and once per alpha with the edit, all from the same noise. Each pair has one baseline mass and one steered mass per
-alpha, and the functions here compare the two masses of the same pairs. Callers pass masses in GeV, of the kept pairs
-only.
+Each seed generates the kept pairs (`events.select`) once without edits and once per alpha, all from the same noise,
+so every pair has a baseline mass and one steered mass per alpha. The functions compare the two masses of the same
+pairs. Masses are in GeV, of the kept pairs only.
 
-R_60 measures how much the steering changes the spectrum below 60 GeV, away from the Z (paper Eq. 19):
-
-    R_60 = (1 / n_b) sum over b of |N_b / N_b^baseline - 1|,
-
-with N_b and N_b^baseline the steered and the baseline pairs in bin b. The sum runs over the n_b bins whose geometric
-centre is below `max_mass` and that hold at least `min_baseline_pairs` baseline pairs, every bin with the same weight.
-The paper uses 200 bins equally spaced in log m over 0.3-300 GeV, max_mass = 60 GeV, and min_baseline_pairs = 20;
-153 of these bins have their centre below 60 GeV. R_60 between the baselines of two seeds is the noise floor.
-
-The target shift measures how far the steering moves the target peak, in log m:
-
-    target shift = median of log m^steered - median of log m^baseline,
-
-with both medians over the same pairs: those whose baseline mass of this seed is in the target class.
-
-The selectivity curve gives, for each alpha, the mean and the standard deviation over seeds of the target shift and
-of R_60. Steering vectors from different methods then compare at the same target shift (paper App. B.1).
-
-The response fits test the first-order prediction of the steering (paper Sec. 5.2). The pole fit takes the fitted
-pole M of each alpha, the mean over seeds, and fits M(alpha) = M(0) exp(alpha S) (Eq. 21). The pair fit takes the
-mass of each pair at each alpha and fits m_p(alpha) = m_p(0) exp(alpha S_p) (Eq. 20, App. D.3). The fitted slopes
-compare with the sum over k of S_C(t_k) from `steering_vectors.gradient_response`. Both R^2 are in GeV. The slopes
-follow the paper, which fits them in different spaces: the pole fit is linear in log M, the pair fit is least squares
-in GeV.
+`r60` is R_60 (Eq. 19), `target_shift` the shift of the target peak in log m, and `selectivity_curve` their mean and
+standard deviation over seeds for each alpha (App. B.1). `pole_response_fit` (Eq. 21) and `pair_response_fit`
+(Eq. 20, App. D.3) fit the first-order response of the pole and of each pair; compare the slopes with
+`steering_vectors.gradient_response`. The two fits differ as in the paper: log M for the pole, GeV for the pairs.
 """
 
 from __future__ import annotations
@@ -72,6 +51,10 @@ def r60(steered_mass: np.ndarray, baseline_mass: np.ndarray, *, edges: np.ndarra
 
     steered_mass, baseline_mass: (E,) mass of each pair in GeV, with and without the edit, same pairs in the same
     order. edges: (bins + 1,) increasing bin edges in GeV. A mass outside the edges enters no bin.
+
+    Every bin with its geometric centre below `max_mass` and at least `min_baseline_pairs` baseline pairs has the same
+    weight. The paper uses 200 bins equally spaced in log m over 0.3-300 GeV, max_mass = 60 GeV, and
+    min_baseline_pairs = 20, which gives 153 bins. R_60 between the baselines of two seeds is the noise floor.
     """
     steered_mass, baseline_mass = checked_masses(steered_mass, baseline_mass)
     if edges.ndim != 1 or len(edges) < 2:

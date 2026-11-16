@@ -1,18 +1,12 @@
 """The paper's figures of a steering run, drawn from plain arrays.
 
-steered_spectrum_figure  Fig. 3 of the paper (fig_spectrum.pdf). The pair mass spectrum of the baseline, of each
-                         alpha, and of real data on log axes, the steered over baseline ratio below it, and a row of
-                         zooms on the resonances. Takes the masses in GeV.
-selectivity_figure       R_60 against the shift of the target, one point per alpha and one curve per method. The paper
-                         has no such figure; App. B gives its numbers. Takes the arrays that metrics.py returns.
-pole_and_width_figure    Fig. 5 of the paper. The fitted pole M and width Gamma of the target against alpha, with the
-                         first-order prediction. Takes the fit results in GeV.
+steered_spectrum_figure  Fig. 3: baseline, each alpha, and real data on log axes, the ratio below, and zooms.
+selectivity_figure       R_60 against the target shift, one curve per method (numbers in App. B; no paper figure).
+pole_and_width_figure    Fig. 5: fitted pole M and width Gamma of the target against alpha, with the prediction.
 save                     writes a figure as PDF.
 
-Each function returns a matplotlib Figure drawn at the width at which the paper prints it, in the style of
-paper.mplstyle. The style applies only inside these functions and `save`, so importing or calling them changes no
-global matplotlib setting. Settings such as bin edges and labels are keyword-only arguments without defaults; the
-config holds them.
+Each function returns a Figure drawn at the printed width of the paper, in the style of paper.mplstyle, which applies
+only inside these functions and `save`. Bin edges, labels, and similar settings are keyword-only; the config holds them.
 """
 
 from __future__ import annotations

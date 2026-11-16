@@ -1,24 +1,15 @@
 """Steering vectors xi from the per-class sums of the gradients (the output of gradients.py), paper Sec. 4.2.
 
-A gradient G_p(t_k) of pair p at step k has 2 x width entries, negative token first; hat G_p is G_p / |G_p|. For a
-target class C, the classes other than C form C'. Per class D the sums give the mean unit gradient m_D and the
-second moment Sigma_D = (1 / n_D) sum over p in D of hat G_p hat G_p^T. The others enter as a mixture:
+For a target class C, the other classes form C' as a mixture with weight w_D = 1 / (number of other classes) for
+`balance: equal` and n_D / (pairs in C') for `balance: by_count`. The methods:
 
-    m_C' = sum over D != C of w_D m_D,    Sigma_C' = sum over D != C of w_D Sigma_D,
-
-with w_D = 1 / (number of other classes) for `balance: equal` and w_D = n_D / (pairs in C') for `balance: by_count`.
-
-fkt:      xi maximises xi^T Sigma_C xi / xi^T (Sigma_C + Sigma_C') xi (paper Eq. 14). With the eigendecomposition
-          Sigma_C + Sigma_C' = U sigma U^T and M_FK = U sigma^(-1/2), xi = M_FK xi~, with xi~ the top eigenvector
-          of M_FK^T Sigma_C M_FK. The paper's Sigma_C' is the sum over D != C of Sigma_D, which is (number of other
-          classes) times the mixture here; the scale of Sigma_C' does not change xi. by_count gives the same xi as
-          sums over pairs, every pair with the same weight.
-fisher:   xi = (K_C + K_C')^(-1) (m_C - m_C'), with K = Sigma - m m^T the covariance of the unit gradients.
+fkt:      the Fukunaga-Koontz direction (Eq. 14). The paper's Sigma_C' is the sum over the other classes, which is
+          (number of other classes) times the mixture here; this scale does not change xi.
+fisher:   xi = (K_C + K_C')^(-1) (m_C - m_C'), with K the covariance of the unit gradients.
 meandiff: xi = m_C - m_C'.
 
-Every steering vector has unit length over both tokens. Its sign makes G_C(t_k)^T xi(t_k) > 0, with G_C the mean
-of the raw gradients of C. `per_step` solves at every step; `constant` solves once with the step-summed gradient
-G_p = sum over k of G_p(t_k) and uses that vector at every step.
+Every vector has unit length over both tokens, and its sign makes G_C(t_k)^T xi(t_k) > 0 for the mean raw gradient.
+`per_step` solves at every step; `constant` solves once with the step-summed gradient and uses it at every step.
 """
 
 from __future__ import annotations
