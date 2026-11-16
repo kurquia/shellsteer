@@ -217,8 +217,8 @@ def fit_counts(counts: np.ndarray, edges: np.ndarray, start: LineshapeFit | None
                           x_scale=THETA_SCALE, xtol=1e-10, ftol=1e-10) for theta in starts]
     best = min(fits, key=lambda fit: fit.cost)
     if best.status <= 0:
-        raise RuntimeError(f"the lineshape fit in {edges[0]:.4g} to {edges[-1]:.4g} GeV did not converge: "
-                           f"{best.message}")
+        raise RuntimeError(f"the lineshape fit of {counts.sum():.0f} pairs in {edges[0]:.4g} to {edges[-1]:.4g} GeV "
+                           f"did not converge: {best.message}")
     theta = best.x
     # The paper's tolerances: 0.1 percent of M for the pole, 1e-6 for Gamma / M and sigma_det / M. The paper did not
     # check rho and log Y; they get 1e-6 too.
