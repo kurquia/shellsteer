@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from shellsteer.config import load_config
+from shellsteer.config import load_config, read_datasets
 
 MAIN = Path(__file__).parent.parent / "configs" / "paper" / "main_z_block1.yaml"
 
@@ -16,12 +16,15 @@ def test_main_config_loads():
     assert config.steering.alphas == [-2, -1, 1, 2]
     assert config.steering.steps == "all"
     assert config.model_dump()["classes"]["windows"]["Jpsi"] == [2.9, 3.3]
+    assert config.datasets[config.events.dataset].pair == "muon"
+    assert config.events.directions == config.events.steering == 1040000
 
 
 def write_variant(tmp_path, change):
     raw = yaml.safe_load(MAIN.read_text())
     raw["classes"] = str(MAIN.parent / raw["classes"])
     raw["networks"] = str(MAIN.parent / raw["networks"])
+    raw["datasets"] = str(MAIN.parent / raw["datasets"])
     change(raw)
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -40,21 +43,23 @@ def write_variant(tmp_path, change):
         (lambda r: r["steering"].update(norm_restore="no"), "valid boolean"),
         (lambda r: r.update(target="W"), "target"),
         (lambda r: r.update(networks=str(MAIN.parent.parent / "classes.yaml")), "networks"),
-        (lambda r: r["events"].update(pair="photon"), None),
+        (lambda r: r["events"].update(dataset="all_events"), "no entry in the datasets file"),
+        (lambda r: r["events"].update(steering=2000000), "events in the file"),
+        (lambda r: r["events"].update(directions=0), "events in the file"),
+        (lambda r: r["events"].update(n_A=1000), "Extra inputs"),
     ],
 )
 def test_bad_values_stop(tmp_path, change, message):
     path = write_variant(tmp_path, change)
-    if message is None:
-        load_config(path)
-        return
     with pytest.raises(ValueError, match=message):
         load_config(path)
 
 
-def test_steps_range_and_charge(tmp_path):
+def test_steps_range(tmp_path):
     config = load_config(write_variant(tmp_path, lambda r: r["steering"].update(steps=[180, 199])))
     assert config.steering.steps == [180, 199]
-    path = write_variant(tmp_path, lambda r: (r["events"].update(pair="jet"), r["steering"].update(tokens="plus")))
-    with pytest.raises(ValueError, match="charged pair"):
-        load_config(path)
+
+
+def test_read_datasets_alone():
+    datasets = read_datasets(MAIN.parent.parent / "datasets.yaml")
+    assert datasets["validation_muon_pairs"].files.steering == "steering.npz"

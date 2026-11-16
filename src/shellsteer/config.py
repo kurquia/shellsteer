@@ -24,17 +24,28 @@ class NetworkEntry(Section):
     width: int
 
 
+class DatasetFiles(Section):
+    directions: str
+    steering: str
+
+
+class DatasetEntry(Section):
+    hf_repo: str
+    revision: str
+    files: DatasetFiles
+    pair: Literal["muon", "electron", "tau"]
+    events: int
+
+
 class Classes(Section):
     min_mass: float
     windows: dict[str, list[float]]
 
 
 class Events(Section):
-    split: Literal["validation"]
-    pair: Literal["muon", "electron", "tau", "photon", "jet", "largeRjet"]
-    order_seed: int
-    n_A: int
-    n_B: int
+    dataset: str
+    directions: int
+    steering: int
 
 
 class Sampler(Section):
@@ -72,6 +83,7 @@ class Config(Section):
     name: str
     network: Literal["shellflow"]
     networks: dict[str, NetworkEntry]
+    datasets: dict[str, DatasetEntry]
     classes: Classes
     target: str
     events: Events
@@ -85,6 +97,13 @@ class Config(Section):
     def check(self):
         if self.network not in self.networks:
             raise ValueError(f"network: {self.network!r} has no entry in the networks file")
+        dataset = self.datasets.get(self.events.dataset)
+        if dataset is None:
+            raise ValueError(f"events.dataset: {self.events.dataset!r} has no entry in the datasets file")
+        for sample in ("directions", "steering"):
+            n = getattr(self.events, sample)
+            if not 0 < n <= dataset.events:
+                raise ValueError(f"events.{sample}: need 0 < n <= {dataset.events} (events in the file), got {n}")
         windows = sorted(self.classes.windows.values())
         for lo, hi in windows:
             if not self.classes.min_mass <= lo < hi:
@@ -100,16 +119,18 @@ class Config(Section):
         steps = self.steering.steps
         if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
             raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
-        if self.steering.tokens in ("minus", "plus") and self.events.pair not in ("muon", "electron", "tau"):
-            raise ValueError(f"steering.tokens: {self.steering.tokens!r} needs a charged pair")
         return self
 
 
 def load_config(path: str | Path) -> Config:
-    """Read the run config at `path` and the networks and classes files it names (paths relative to the run config)."""
+    """Read the run config at `path` and the networks, datasets, and classes files it names.
+
+    The paths of those files are relative to the run config.
+    """
     path = Path(path)
     raw = yaml.safe_load(path.read_text())
     raw["networks"] = yaml.safe_load((path.parent / raw["networks"]).read_text())
+    raw["datasets"] = yaml.safe_load((path.parent / raw["datasets"]).read_text())
     raw["classes"] = yaml.safe_load((path.parent / raw["classes"]).read_text())
     return Config.model_validate(raw)
 
@@ -118,3 +139,9 @@ def read_networks(path: str | Path) -> dict[str, NetworkEntry]:
     """Read a networks file on its own, for example in a notebook: network name -> entry."""
     raw = yaml.safe_load(Path(path).read_text())
     return {name: NetworkEntry.model_validate(entry) for name, entry in raw.items()}
+
+
+def read_datasets(path: str | Path) -> dict[str, DatasetEntry]:
+    """Read a datasets file on its own, for example in a notebook: dataset name -> entry."""
+    raw = yaml.safe_load(Path(path).read_text())
+    return {name: DatasetEntry.model_validate(entry) for name, entry in raw.items()}

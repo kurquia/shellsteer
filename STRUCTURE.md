@@ -11,6 +11,7 @@ pyproject.toml         direct dependencies only, plus uv.lock
 configs/
   classes.yaml         mass windows of the resonance classes
   networks.yaml        ShellFlow, ShellFlow-B, ShellGATr: checkpoint and residual width
+  datasets.yaml        event samples on Hugging Face: the directions and the steering sample
   paper/
     main_z_block1.yaml   Sec. 5: Z, block 1, FKT
     ablation_z.yaml      Sec. 5.3: ablation of the steering vector
@@ -27,7 +28,7 @@ src/<package>/
   networks.py          loads a network by name from networks.yaml
   sampler.py           Euler sampler with seeded noise
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
-  events.py            event selection and the subsets A and B
+  events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
   moments.py           per-class sums of the gradients
   directions.py        fkt, lda, meandiff; per step or constant in time
   artifacts.py         steering vectors saved with their metadata
@@ -46,8 +47,8 @@ A run writes to `runs/<name>/`, which git ignores:
 ```
 runs/<name>/
   config.yaml          the resolved config of the run
-  events_A.npz
-  events_B.npz
+  events_directions.npz
+  events_steering.npz
   moments.npz
   xi.npz               steering vectors and their metadata
   generated/

@@ -1,0 +1,13 @@
+# Event samples the pipeline can load, by name. Each holds two samples of the same pair type:
+# directions (gradients and steering vectors) and steering (the events we steer and generate).
+# revision: the commit of the Hugging Face repository, so the same files always load.
+# events: number of events in each file.
+
+validation_muon_pairs:
+  hf_repo: not-uploaded-yet/shellflow-validation-muon-pairs
+  revision: not-uploaded-yet
+  files:
+    directions: directions.npz
+    steering: steering.npz
+  pair: muon                     # muon | electron | tau
+  events: 1040000

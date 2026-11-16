@@ -3,16 +3,15 @@
 name: main_z_block1
 network: shellflow
 networks: ../networks.yaml          # relative to this file
+datasets: ../datasets.yaml          # relative to this file
 classes: ../classes.yaml            # relative to this file
 target: Z
 
-# Which events, and how many. A builds the steering vectors, B is steered.
+# Which events, and how many.
 events:
-  split: validation
-  pair: muon                        # muon | electron | tau | photon | jet | largeRjet
-  order_seed: 2030
-  n_A: 1040000
-  n_B: 1040000
+  dataset: validation_muon_pairs
+  directions: 1040000               # events for the gradients and the steering vectors
+  steering: 1040000                 # events we steer and generate
 
 # The Euler sampler that generates the events.
 sampler:
