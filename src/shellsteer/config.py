@@ -76,8 +76,24 @@ class Steering(Section):
 
 
 class Readout(Section):
-    r60_max_mass: float
+    spectrum_range: list[float]
     spectrum_bins: int
+    r60_max_mass: float
+    r60_min_baseline_pairs: int
+
+
+class Lineshape(Section):
+    half_width: float
+    bins: int
+    min_window_pairs: int
+
+
+class Plots(Section):
+    zooms: dict[str, list[float]]
+    zoom_bins: int
+    baseline_label: str
+    pair_label: str
+    target_label: str
 
 
 class Config(Section):
@@ -93,6 +109,8 @@ class Config(Section):
     steering_vectors: SteeringVectors
     steering: Steering
     readout: Readout
+    lineshape: Lineshape
+    plots: Plots
 
     @model_validator(mode="after")
     def check(self):
@@ -122,6 +140,19 @@ class Config(Section):
         steps = self.steering.steps
         if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
             raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
+        # The checks below guard settings that the run reads only after the generation.
+        spectrum = self.readout.spectrum_range
+        if len(spectrum) != 2 or not 0 < spectrum[0] < spectrum[1]:
+            raise ValueError(f"readout.spectrum_range: need [low, high] with 0 < low < high, got {spectrum}")
+        if not spectrum[0] < self.readout.r60_max_mass <= spectrum[1]:
+            raise ValueError(f"readout.r60_max_mass: need it inside readout.spectrum_range {spectrum}, "
+                             f"got {self.readout.r60_max_mass}")
+        if self.lineshape.half_width <= 0 or self.lineshape.bins <= 5:
+            raise ValueError(f"lineshape: need half_width > 0 and more bins than the 5 fitted parameters, got "
+                             f"half_width {self.lineshape.half_width} and bins {self.lineshape.bins}")
+        for label, zoom in self.plots.zooms.items():
+            if len(zoom) != 2 or not 0 < zoom[0] < zoom[1]:
+                raise ValueError(f"plots.zooms[{label!r}]: need [low, high] with 0 < low < high, got {zoom}")
         return self
 
 

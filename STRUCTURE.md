@@ -31,11 +31,26 @@ src/<package>/
   events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
   steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with their metadata
-  metrics.py           R_60 and the selectivity curve over alpha
-  plots.py             spectrum with ratio panel, selectivity curve
+  steered_generation.py  the edit at a block; generation of the pairs, steered or baseline; files per seed and alpha
+  lineshape.py         the paper's fit of the Z lineshape: pole M and width Gamma of a mass spectrum
+  metrics.py           R_60, the shift of the target, and the selectivity curve over alpha
+  plots.py             steered spectrum with ratio panel and zooms, selectivity curve, pole and width against alpha
+  paper.mplstyle       the paper's figure style, applied only inside plots.py
+  data/
+    luminosity_nnpdf40_13tev.csv  quark luminosities with the muon acceptance, read by lineshape.py
 tests/
+  test_config.py       the paper config loads; each bad value stops with its message
+  test_networks.py     the network loads from Hugging Face, frozen
+  test_sampler.py      the sampler matches the paper's sampler bit for bit on CPU
+  test_hooks.py        alpha = 0 reproduces the baseline bit for bit; probe and steer match the paper's code
+  test_events.py       pair slots, edited tokens, loading, classes, and selection of the pairs
+  test_gradients.py    the per-class sums equal the sums of the per-pair gradients
   test_steering_vectors.py  FKT on a toy problem with a known answer; save and load round trip
-  test_hooks.py        alpha = 0 reproduces the baseline bit for bit
+  test_steered_generation.py  alpha = 0 is the baseline; the batches equal a loop by hand; save and load
+  test_lineshape.py    the paper's baseline histogram refits to the paper's pole and width
+  test_metrics.py      R_60 and the target shift on spectra with known answers
+  test_plots.py        each figure draws its panels and lines; bad inputs stop
+  test_gpu.py          the paper's baseline and sums on a CUDA GPU; skipped without one
 ```
 
 ## Outputs
@@ -45,14 +60,17 @@ A run writes to `runs/<name>/`, which git ignores:
 ```
 runs/<name>/
   config.yaml          the resolved config of the run
-  events_directions.npz
-  events_steering.npz
-  gradient_moments.npz
+  gradient_moments.npz per-class sums of the unit gradients, with their metadata
   steering_vectors.npz steering vectors and their metadata
   generated/
-    alpha_+1.0/        one folder per alpha; alpha_0.0 is the baseline
+    kept.npz           the class of each kept pair of the steering sample, chosen on the first seed's baseline
+    seed_<seed>/
+      alpha_+0.npz     the baseline: mass and four-momenta of each pair, with the metadata
+      alpha_-1.npz     one file per alpha, named by alpha_<alpha:+g>
   plots/
 ```
+
+The events load from the Hugging Face cache on every run, so the run folder holds no copy of them.
 
 ## Rules
 
