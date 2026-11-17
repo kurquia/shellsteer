@@ -40,7 +40,7 @@ from shellsteer.activation_means import (activation_means, load_activation_means
 from shellsteer.config import Config, load_config
 from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
                                 parse_devices)
-from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, download, load_events,
+from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, final_state_rows, load_events,
                                load_final_states, select, tokens_of_type)
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
 from shellsteer.kinematics import (MASS, MASSIVE_TYPES, VARIABLES, largest_changes, load_panels, mass_panels, real_mass,
@@ -663,23 +663,14 @@ def run_ablation_plots(config: Config, run: Path, devices: Devices) -> None:
     log(stage, f"wrote {run / ABLATION_FIGURE_FILE}")
 
 
-def steering_rows(config: Config) -> tuple[np.ndarray | None, str]:
-    """The ShellFlow rows of the first events.steering events of the steering file, and the file; None if the file
-    has no `rows` key."""
-    path = download(config.dataset("steering"), "steering")
-    with np.load(path) as data:
-        rows = data["rows"][:config.events.steering] if "rows" in data.files else None
-    return rows, path
-
-
 def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
     """Counts of p_T, eta, phi, E, and m of every particle type for real data, the baseline, and each alpha (Figs. 4
     and 14), and the largest change per bin that Sec. 5.1 and App. D.1 quote.
 
     m is the mass column of Fig. 14, for jets, large-R jets, and hadronic taus: the decoded mass of the generated files
-    and `kinematics.real_mass` of the `rows` of the steering file. Without either, the counts have no m and the log
-    and the metadata say what is missing. The largest change of the types other than the edited one uses p_T, eta,
-    phi, and E, as the paper's number; the readout lists the largest change of m on its own.
+    and `kinematics.real_mass` of the `rows` of the steering file. Without the decoded masses, the counts have no m
+    and the log and the metadata say what is missing. The largest change of the types other than the edited one uses
+    p_T, eta, phi, and E, as the paper's number; the readout lists the largest change of m on its own.
     """
     stage = "kinematics-readout"
     seed, alphas = config.steering.seeds[0], [0.0, *config.steering.alphas]
@@ -708,17 +699,13 @@ def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
     missing_mass = None             # why the counts have no m, or None
     if any(code in MASSIVE_TYPES for code in masks):
         no_mass = [str(paths[alpha]) for alpha, events in ((0.0, baseline), *generated.items()) if events.mass is None]
-        rows, path = (None, None) if no_mass else steering_rows(config)
         if no_mass:
             missing_mass = (f"{len(no_mass)} of the {len(paths)} generated files, such as {no_mass[0]}, hold no "
                             f"decoded masses (written before `steer generate` stored them); rerun "
                             f"`steer generate --overwrite`")
-        elif rows is None:
-            missing_mass = (f"the steering file {path} has no `rows` key, so no real-data masses; it needs the "
-                            f"event files with the ShellFlow rows")
         else:
-            measured = real_mass(rows, particle_type, particle_mask)
-            del rows
+            measured = np.concatenate([real_mass(rows, particle_type[index], particle_mask[index]) for index, rows in
+                                       final_state_rows(config.dataset("steering"), config.events.steering)])
             for code, panel in mass_panels(measured, baseline.mass,
                                            {alpha: events.mass for alpha, events in generated.items()}, masks,
                                            bins=kinematics.bins).items():

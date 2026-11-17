@@ -16,7 +16,8 @@ grey line of paper Figs. 3 and 7).
 A dataset of every final state (pair: null in datasets.yaml, sample C of paper Fig. 4) holds only a steering sample.
 Its events have zero, one, or several particles of each type and no pair. `load_final_states` reads them. The file
 holds `rows`, STORED_KEYS, `event`, `p4` (the real four-momenta, the grey lines of Fig. 4), and `m_real`, which is NaN
-except in events with exactly one muon pair. It has no priority: the events load in file order.
+except in events with exactly one muon pair. It has no priority: the events load in file order. `final_state_rows`
+streams the rows of the same events, for the real-data mass of Fig. 14.
 
 `rows` holds the bytes ShellFlow's ParticleDataset reads for each event: float32 (E, 2, 266), the raw feature values
 and the packed particle and feature indices. Each network normalises the extra features with the constants of its own
@@ -136,11 +137,13 @@ def particle_extra(rows: np.ndarray, dataloader_config: str, batch_size: int = 1
     return extra
 
 
-def read_extra(data, path: str, keep: np.ndarray, dataloader_config: str, batch_size: int = 16384) -> np.ndarray:
-    """(len(keep), 10, 13) particle_extra of the events `keep` (sorted row numbers) of the open file `data`.
+def row_blocks(data, path: str, keep: np.ndarray, batch_size: int = 16384
+               ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """(index, rows) of the events `keep` (sorted row numbers) of the open file `data`, block by block: index holds
+    row numbers of `keep`, rows their float32 (len(index), 2, 266) ShellFlow rows. The blocks cover `keep` in order.
 
-    A compressed file cannot be memory-mapped, so this streams `rows` in blocks of `batch_size` events and keeps only
-    the `particle_extra` of the needed events. The rows of the whole file (2.2 GB) are never in memory at once.
+    A compressed file cannot be memory-mapped, so this streams `rows` in blocks of `batch_size` events and yields
+    only the rows of the needed events. The rows of the whole file (2.2 GB) are never in memory at once.
     """
     with data.zip.open("rows.npy") as file:
         version = np.lib.format.read_magic(file)
@@ -150,15 +153,24 @@ def read_extra(data, path: str, keep: np.ndarray, dataloader_config: str, batch_
             raise ValueError(f"{path}: rows is {dtype} {shape}, expected float32 (E, 2, 266) in C order")
         if len(keep) and keep[-1] >= shape[0]:
             raise ValueError(f"{path}: rows holds {shape[0]} events, the file has more")
-        extra = np.empty((len(keep), PARTICLES, 13), np.float32)
         done, row_bytes = 0, 2 * 266 * 4
         for start in range(0, int(keep[-1]) + 1 if len(keep) else 0, batch_size):
             count = min(batch_size, shape[0] - start)
             block = np.frombuffer(file.read(count * row_bytes), np.float32).reshape(count, 2, 266)
             wanted = keep[done:np.searchsorted(keep, start + count)]
-            extra[done:done + len(wanted)] = particle_extra(block[wanted - start], dataloader_config, batch_size)
+            yield wanted, block[wanted - start]
             done += len(wanted)
             del block
+
+
+def read_extra(data, path: str, keep: np.ndarray, dataloader_config: str, batch_size: int = 16384) -> np.ndarray:
+    """(len(keep), 10, 13) particle_extra of the events `keep` (sorted row numbers) of the open file `data`, from
+    the rows of `row_blocks`."""
+    extra = np.empty((len(keep), PARTICLES, 13), np.float32)
+    done = 0
+    for index, rows in row_blocks(data, path, keep, batch_size):
+        extra[done:done + len(index)] = particle_extra(rows, dataloader_config, batch_size)
+        done += len(index)
     return extra
 
 
@@ -209,6 +221,17 @@ def load_final_states(entry: DatasetEntry, n: int, network: NetworkEntry) -> Fin
     if p4.shape != (*batch["particle_type"].shape, 4):
         raise ValueError(f"{path}: p4 has shape {p4.shape}, expected {(*batch['particle_type'].shape, 4)}")
     return FinalStates(batch=as_conditioning(batch), event=event, p4=p4, m_real=m_real)
+
+
+def final_state_rows(entry: DatasetEntry, n: int, batch_size: int = 16384) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """(index, rows) of the first n events of a dataset of every final state, the events of `load_final_states`,
+    block by block as `row_blocks` yields them. The real-data mass of paper Fig. 14 comes from these rows."""
+    if entry.pair is not None:
+        raise ValueError(f"the dataset {entry.files.steering!r} holds {entry.pair} pairs; it has no final states")
+    path = download(entry, "steering")
+    with np.load(path) as data:
+        check_file(path, data, {"rows", "event"}, entry, n)
+        yield from row_blocks(data, path, np.arange(n), batch_size)
 
 
 def pair_slots(batch: dict[str, torch.Tensor], pair: str) -> tuple[torch.Tensor, torch.Tensor]:

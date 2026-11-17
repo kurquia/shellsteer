@@ -202,7 +202,7 @@ Fig. 14 of the paper also shows the mass $m$ of jets, large-R jets, and hadronic
 The float32 four-momenta do not give this mass for a hadronic tau, which is below 1 GeV: $E^2 - |\vec p|^2$ cancels.
 So the generated mass is the mass that the decoder of `ShellFlow` builds each particle from, which `steer generate` stores in the generated files.
 The real-data mass is $\sqrt{E^2 - (p_T \cosh\eta)^2}$ in float64, from $p_T$, $\eta$, and $E$ as the dataset stores them, in the `rows` key of the event file.
-If the generated files or the event file lack these masses, `kinematics-readout` logs what is missing, and Fig. 14 has no mass column.
+If the generated files lack the decoded masses, as files written before `steer generate` stored them do, `kinematics-readout` logs what is missing, and Fig. 14 has no mass column.
 The 2.4% of App. D.1, the largest change per bin of the other particle types, uses $p_T$, $\eta$, $\phi$, and $E$ only, as in the paper.
 `kinematics_readout.json` lists the largest change of $m$ on its own.
 
