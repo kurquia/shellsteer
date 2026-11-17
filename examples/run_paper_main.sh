@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
 # The paper's main run (Sec. 5: Z, block 1, FKT), one stage per command. Outputs go to runs/main_z_block1/.
-# It makes Fig. 3 (seed 2041, alpha -2, -1, +1, +2; the real-data line is not drawn yet). It does not reproduce
-# Fig. 5: that figure needs alpha from -3 to 3 in steps of 0.5 and three seeds, which this config does not hold.
+# It makes Fig. 3 (seed 2041, alpha -2, -1, +1, +2, and real data). It does not reproduce Fig. 5: that figure needs
+# alpha from -3 to 3 in steps of 0.5 and three seeds, which this config does not hold (see the end of this file).
 # Times and disk sizes are estimates from the code and from earlier runs on one NVIDIA B200, not measurements of
 # this script: 1,040,000 events per sample, 200 Euler steps, batch 8192, float32.
+#
+# Without the gradient pass: vectors/main_block1.npz holds the vectors of the steering-vectors stage below (block 1
+# only, STRUCTURE.md). Each command below then replaces this script, from the repository root; each generation of
+# 1,040,000 events takes about 14 min on one B200.
+#   Fig. 3, 5 generations, about 70 min:
+#     steer all configs/paper/main_z_block1.yaml --set steering_vectors.from_file=vectors/main_block1.npz \
+#       --set name=main_z_block1_from_vectors
+#   Fig. 5, 13 alphas x 3 seeds = 39 generations, about 9 h; its steered spectrum draws all 12 alphas:
+#     steer all configs/paper/main_z_block1.yaml --set steering_vectors.from_file=vectors/main_block1.npz \
+#       --set 'steering.alphas=[-3, -2.5, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 3]' \
+#       --set 'steering.seeds=[2041, 2042, 2043]' --set name=main_z_block1_fig5_from_vectors
+# The file stores no gradient response S (Eq. 21), so these runs report S as unavailable and Fig. 5 has no dotted
+# first-order line.
 set -euo pipefail
 CONFIG=configs/paper/main_z_block1.yaml
 
