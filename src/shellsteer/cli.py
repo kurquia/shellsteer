@@ -6,6 +6,11 @@ files of the stages it needs and stops, naming the missing file and the stage th
 stage refuses to replace its own output unless --overwrite is given, and refuses to run on outputs that were made
 with other settings. The resolved config, overrides applied, goes to config.yaml in the run folder; the log to stdout.
 
+With steering_vectors.from_file, the vectors come from a file of an earlier `steer steering-vectors` (stages_of):
+`steer steering-vectors` checks the file against the config and copies it into the run folder, the steering run
+has no gradients stage, and in the ablation run `steer gradients` makes only the baseline and the kept pairs of the
+directions sample, which c_k needs. S (Eq. 21) then comes from the file, or the readout reports it as unavailable.
+
 The readouts write JSON: a few numbers per seed, which a person can read and any language can load. The lineshape
 fit is a model of the Z (App. E) and runs only when the target is Z.
 """
@@ -13,13 +18,14 @@ fit is a model of the Z (App. E) and runs only when the target is Z.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
 import sys
 import time
 import types
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Union, get_args, get_origin
 
@@ -43,7 +49,9 @@ from shellsteer.sampler import NanError
 from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_pairs,
                                            generated_path, kept_path, load_generated, load_kept, save_generated,
                                            save_kept)
-from shellsteer.steering_vectors import gradient_response, load_steering_vector, save_steering_vectors, steering_vectors
+from shellsteer.steering_vectors import (check_steering_vectors_file, gradient_response,
+                                        gradient_responses_per_step, load_gradient_response_per_step,
+                                        load_steering_vector, save_steering_vectors, steering_vectors)
 
 CONFIG_FILE = "config.yaml"
 MOMENTS_FILE = "gradient_moments.npz"
@@ -181,6 +189,13 @@ def run_gradients(config: Config, run: Path, device: str) -> None:
     log(stage, f"baseline of seed {config.gradients.seed} in {time.perf_counter() - start:.1f} s; kept "
                f"{config.events.keep:,} pairs: {class_counts(kept, names)}")
     log(stage, f"baseline of seed {config.gradients.seed}: {baseline.nans.text()}")
+    kept_metadata = {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions",
+                     "device": device, "NaN counts": baseline.nans.metadata()}
+    if config.steering_vectors.from_file is not None:
+        save_kept(run / DIRECTIONS_KEPT_FILE, kept, directions.event, kept_metadata)
+        log(stage, f"wrote {run / DIRECTIONS_KEPT_FILE}; no gradient pass: the vectors come from "
+                   f"steering_vectors.from_file {config.steering_vectors.from_file}")
+        return
     start = time.perf_counter()
     moments, nans = gradient_moments(network, directions, kept, config.classes, blocks=list(config.gradients.blocks),
                                      seed=config.gradients.seed, **sizes)
@@ -195,22 +210,53 @@ def run_gradients(config: Config, run: Path, device: str) -> None:
                 "NaN counts": nans.metadata(), "NaN counts of the baseline": baseline.nans.metadata()}
     save_moments(run / MOMENTS_FILE, moments, metadata)
     log(stage, f"wrote {run / MOMENTS_FILE}")
-    save_kept(run / DIRECTIONS_KEPT_FILE, kept, directions.event,
-              {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions", "device": device,
-               "NaN counts": baseline.nans.metadata()})
+    save_kept(run / DIRECTIONS_KEPT_FILE, kept, directions.event, kept_metadata)
     log(stage, f"wrote {run / DIRECTIONS_KEPT_FILE}")
 
 
+def edited_blocks(config: Config) -> list[int]:
+    """The blocks the run edits: steering.block, or ablation.block for the mean ablation."""
+    return [config.steering.block if config.ablation is None else config.ablation.block]
+
+
 def run_steering_vectors(config: Config, run: Path, device: str) -> None:
-    """Steering vectors of every class and block from the class sums (paper Sec. 4.2)."""
+    """Steering vectors of every class and block (paper Sec. 4.2): from the class sums, or copied from
+    steering_vectors.from_file after a check against the config."""
     stage = "steering-vectors"
-    moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
     method = config.steering_vectors
+    settings = {"method": method.method, "in_time": method.in_time, "balance": method.balance}
+    if method.from_file is not None:
+        source = Path(method.from_file)
+        try:
+            unrecorded = check_steering_vectors_file(
+                source, **settings, classes=config.classes.model_dump(), blocks=edited_blocks(config),
+                steps=config.sampler.steps, network_name=config.network,
+                network=config.networks[config.network].model_dump())
+        except ValueError as error:
+            raise StageError(f"steering_vectors.from_file: {error}") from error
+        for what in unrecorded:
+            log(stage, f"{source} does not record {what}; not checked")
+        shutil.copyfile(source, run / VECTORS_FILE)
+        digest = hashlib.md5((run / VECTORS_FILE).read_bytes()).hexdigest()
+        log(stage, f"{method.method}, {method.in_time}, balance {method.balance}: copied {source} (md5 {digest}); "
+                   f"no gradient pass in this run")
+        log(stage, f"wrote {run / VECTORS_FILE}")
+        return
+    moments, moments_metadata = load_moments(require(run / MOMENTS_FILE, "gradients"))
     vectors = steering_vectors(moments, method.method, method.in_time, method.balance)
-    save_steering_vectors(run / VECTORS_FILE, vectors, moments["classes"], moments["blocks"],
-                          {**method.model_dump(), "gradient moments file": MOMENTS_FILE})
+    # S as the edit applies xi, in float32 (load_steering_vector).
+    responses = gradient_responses_per_step(moments, vectors.astype(np.float32))
+    gradient_pass = {key: moments_metadata[key] for key in ("dataset", "events", "keep", "seed", "blocks",
+                                                            "batch_size", "device")}
+    save_steering_vectors(run / VECTORS_FILE, vectors, moments["classes"], moments["blocks"], {
+        **settings, "gradient moments file": MOMENTS_FILE, "steps": moments_metadata["steps"],
+        "classes": config.classes.model_dump(), "network": moments_metadata["network"],
+        "gradient pass": gradient_pass}, response_per_step=responses)
     log(stage, f"{method.method}, {method.in_time}, balance {method.balance}: vectors of shape {vectors.shape} "
                f"(classes, blocks, steps, 2, width)")
+    target = [str(name) for name in moments["classes"]].index(config.target)
+    log(stage, f"gradient response S of the {config.target} vector (Eq. 21): " + ", ".join(
+        f"block {int(block)} {responses[target, b].sum():.4f}" for b, block in enumerate(moments["blocks"])))
     log(stage, f"wrote {run / VECTORS_FILE}")
 
 
@@ -273,11 +319,30 @@ def counted_pairs(run: Path, seed: int) -> tuple[np.ndarray, np.ndarray]:
     return kept, kept != ""
 
 
+def first_order_slope(config: Config, run: Path) -> tuple[float | None, str]:
+    """S (Eq. 21) of the target's vector at steering.block and the file it comes from; or None and the reason.
+
+    S is the sum over the Euler steps of the response per step that `steer steering-vectors` stores in the vectors
+    file. For a vectors file without it, S comes from the run's gradient_moments.npz if the run made its own
+    vectors; a run started from a file has no moments.
+    """
+    vectors_file = require(run / VECTORS_FILE, "steering-vectors")
+    per_step = load_gradient_response_per_step(vectors_file, config.target, config.steering.block)
+    if per_step is not None:
+        return float(per_step.sum()), VECTORS_FILE
+    from_file = config.steering_vectors.from_file
+    if from_file is None:
+        moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
+        xi = load_steering_vector(vectors_file, config.target, config.steering.block)
+        return gradient_response(moments, xi, config.target, config.steering.block), MOMENTS_FILE
+    return None, (f"steering_vectors.from_file {from_file} stores no gradient response, and the run has no "
+                  f"gradient pass")
+
+
 def run_readout(config: Config, run: Path, device: str) -> None:
     """R_60, the target shift, the selectivity curve, the response fits, and the Z lineshape fits (Sec. 5, App. E)."""
     stage = "readout"
-    moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
-    xi = load_steering_vector(require(run / VECTORS_FILE, "steering-vectors"), config.target, config.steering.block)
+    s, s_source = first_order_slope(config, run)
     require_generated(config, run)
     seeds, alphas = list(config.steering.seeds), list(config.steering.alphas)
     readout, classes = config.readout, config.classes
@@ -322,10 +387,14 @@ def run_readout(config: Config, run: Path, device: str) -> None:
         "target": config.target, "block": config.steering.block, "method": config.steering_vectors.method,
         "seeds": seeds, "alphas": [0.0, *alphas],
         "kept pairs": {name: int(np.sum(kept == name)) for name in class_names(classes)},
-        "gradient response": gradient_response(moments, xi, config.target, config.steering.block),
+        "gradient response": s, "gradient response source": s_source if s is not None else None,
+        "gradient response unavailable": s_source if s is None else None,
         "selectivity curve": {key: value.tolist() for key, value in curve.items()},
         "per seed and alpha": rows, "lineshape over seeds": None, "pole response fit": None}
-    log(stage, f"gradient response S = {result['gradient response']:.4f} (Eq. 21, first order)")
+    if s is None:
+        log(stage, f"gradient response S (Eq. 21) UNAVAILABLE: {s_source}; readout.json has null")
+    else:
+        log(stage, f"gradient response S = {s:.4f} (Eq. 21, first order), from {s_source}")
     if fit_lineshape:
         grid = sorted({0.0, *alphas})
         poles = np.array([[fits[(seed, alpha)].pole for seed in seeds] for alpha in grid])
@@ -377,6 +446,9 @@ def run_plots(config: Config, run: Path, device: str) -> None:
                                               target_label=plots.target_label, pair_label=plots.pair_label,
                                               max_mass=readout.r60_max_mass)}
     over_seeds = result["lineshape over seeds"]
+    if over_seeds is not None and result["gradient response"] is None:
+        log(stage, f"pole_and_width.pdf has no first-order line: no gradient response S "
+                   f"({result['gradient response unavailable']})")
     if over_seeds is None:
         log(stage, f"no pole and width figure: no lineshape fit for target {config.target}")
     else:
@@ -615,20 +687,62 @@ def chain_of(config: Config) -> str:
     return "steering" if config.ablation is None else "ablation"
 
 
-def ancestors(stage: Stage) -> list[Stage]:
-    """Every stage whose output `stage` depends on, directly or through other stages, in the order of STAGES."""
+def stages_of(config: Config) -> tuple[Stage, ...]:
+    """The stages of the config's run, in order.
+
+    With steering_vectors.from_file, steering-vectors needs no earlier stage and takes over the config keys of the
+    gradients stage (network, events, sampler, ...), which the later stages rely on. The steering run then has no
+    gradients stage. The ablation run keeps it, writing only directions_kept.npz: c_k needs those kept pairs.
+    """
+    chain = [s for s in STAGES if s.chain in ("both", chain_of(config))]
+    if config.steering_vectors.from_file is None:
+        return tuple(chain)
+    gradients = BY_NAME["gradients"]
+    adjusted = []
+    for stage in chain:
+        if stage.name == "gradients":
+            if chain_of(config) == "steering":
+                continue
+            stage = replace(stage, outputs=(DIRECTIONS_KEPT_FILE,),
+                            help="baseline and kept pairs of the directions sample, no gradient pass "
+                                 "(steering_vectors.from_file); GPU")
+        elif stage.name == "steering-vectors":
+            sections = tuple(key for key in gradients.sections if key != "gradients")
+            stage = replace(stage, needs=(), sections=(*sections, *stage.sections),
+                            help="check steering_vectors.from_file against the config and copy it; CPU, seconds")
+        adjusted.append(stage)
+    return tuple(adjusted)
+
+
+def stage_of(name: str, config: Config) -> Stage:
+    """The stage `name` of the config's run; stops if the run has no such stage."""
+    stages = {stage.name: stage for stage in stages_of(config)}
+    if name in stages:
+        return stages[name]
+    stage = BY_NAME[name]
+    if stage.chain in ("both", chain_of(config)):            # only gradients, left out by steering_vectors.from_file
+        raise StageError(f"`steer {name}`: config {config.name} takes its vectors from steering_vectors.from_file "
+                         f"{config.steering_vectors.from_file}, so the steering run has no gradient pass; set "
+                         f"steering_vectors.from_file=null to run it")
+    raise StageError(f"`steer {name}` is a stage of the {stage.chain} run; config {config.name} runs the "
+                     f"{chain_of(config)} stages {', '.join(s.name for s in stages_of(config))}")
+
+
+def ancestors(stage: Stage, stages: tuple[Stage, ...] = STAGES) -> list[Stage]:
+    """Every stage of `stages` whose output `stage` depends on, directly or through other stages, in order."""
+    by_name = {s.name: s for s in stages}
     names, todo = set(), list(stage.needs)
     while todo:
         name = todo.pop()
         if name not in names:
             names.add(name)
-            todo.extend(BY_NAME[name].needs)
-    return [s for s in STAGES if s.name in names]
+            todo.extend(by_name[name].needs)
+    return [s for s in stages if s.name in names]
 
 
-def used_by(stage: Stage) -> set[str]:
+def used_by(stage: Stage, stages: tuple[Stage, ...] = STAGES) -> set[str]:
     """Config keys that the output of `stage` depends on: its own and those of the stages it depends on."""
-    return {key for s in (*ancestors(stage), stage) for key in s.sections}
+    return {key for s in (*ancestors(stage, stages), stage) for key in s.sections}
 
 
 def touches(key: str, sections: set[str]) -> bool:
@@ -639,17 +753,14 @@ def touches(key: str, sections: set[str]) -> bool:
 def prepare(stage: Stage, config: Config, run: Path, overwrite: bool, warn_later: bool) -> None:
     """Check the run folder, then write config.yaml and remove the old output of the stage (--overwrite).
 
-    Stops if the stage belongs to the other chain, if the output of a stage it needs is missing or was made with
-    other settings, if its own output exists without --overwrite, or if new settings of this stage would leave the
-    output of a later stage made with the old ones.
+    `stage` comes from stage_of. Stops if the output of a stage it needs is missing or was made with other settings,
+    if its own output exists without --overwrite, or if new settings of this stage would leave the output of a later
+    stage made with the old ones.
     """
-    if stage.chain not in ("both", chain_of(config)):
-        other = [s.name for s in STAGES if s.chain in ("both", chain_of(config))]
-        raise StageError(f"`steer {stage.name}` is a stage of the {stage.chain} run; config {config.name} runs the "
-                         f"{chain_of(config)} stages {', '.join(other)}")
+    stages = stages_of(config)
     new = config.model_dump()
     config_path = run / CONFIG_FILE
-    needed = ancestors(stage)
+    needed = ancestors(stage, stages)
     for done in needed:
         for out in done.outputs:
             require(run / out, done.name)
@@ -659,7 +770,7 @@ def prepare(stage: Stage, config: Config, run: Path, overwrite: bool, warn_later
         raise StageError(f"{run} has the output of `steer {needed[0].name}` but no {CONFIG_FILE}; start a new run "
                          f"with --set name=<new name>")
     for done in needed:
-        clash = [key for key in changed if touches(key, used_by(done))]
+        clash = [key for key in changed if touches(key, used_by(done, stages))]
         if clash:
             raise StageError(f"{config_path} differs at {clash}, settings that `steer {done.name}` used for its "
                              f"output; run with the settings of {config_path}, or start a new run with "
@@ -668,8 +779,9 @@ def prepare(stage: Stage, config: Config, run: Path, overwrite: bool, warn_later
     if existing and not overwrite:
         raise StageError(f"{existing[0]} exists; pass --overwrite to replace it, or --set name=<new name> for a new "
                          f"run")
-    later = [(s, run / out) for s in STAGES if stage in ancestors(s) for out in s.outputs if (run / out).exists()]
-    clash = [key for key in changed if touches(key, used_by(stage))]
+    later = [(s, run / out) for s in stages if stage in ancestors(s, stages) for out in s.outputs
+             if (run / out).exists()]
+    clash = [key for key in changed if touches(key, used_by(stage, stages))]
     if clash and later:
         raise StageError(f"the settings {clash} differ from {config_path}, and {later[0][1]} was made with the old "
                          f"ones; remove the outputs of the later stages first, or start a new run with "
@@ -721,10 +833,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = read_config(args.config, args.overrides)
         run = Path(args.runs) / config.name
-        if args.stage == "all":
-            stages = [s for s in STAGES if s.chain in ("both", chain_of(config))]
-        else:
-            stages = [BY_NAME[args.stage]]
+        stages = stages_of(config) if args.stage == "all" else (stage_of(args.stage, config),)
         device = getattr(args, "device", "cpu")
         if any(stage.gpu for stage in stages):
             check_device(device)

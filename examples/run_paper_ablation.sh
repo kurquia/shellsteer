@@ -3,6 +3,10 @@
 # directions sample for seeds 2040, 2041, and 2042. Outputs go to runs/ablation_z/.
 # Times and disk sizes are estimates from the code and from earlier runs on one NVIDIA B200, not measurements of
 # this script: 1,040,000 events per sample, 200 Euler steps, batch 8192, float32.
+#
+# Without the gradient pass: add --set steering_vectors.from_file=vectors/main_block1.npz to every command (STRUCTURE.md).
+# `steer gradients` then makes only the baseline of the directions sample and its kept pairs, which c_k needs: about
+# 14 min instead of about 1 h on one B200. `steer steering-vectors` copies the file after a check against the config.
 set -euo pipefail
 CONFIG=configs/paper/ablation_z.yaml
 

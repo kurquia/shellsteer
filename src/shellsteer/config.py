@@ -71,6 +71,11 @@ class SteeringVectors(Section):
     method: Literal["fkt", "fisher", "meandiff"]
     in_time: Literal["per_step", "constant"]
     balance: Literal["equal", "by_count"]
+    # A steering_vectors.npz written by `steer steering-vectors`, such as vectors/main_block1.npz; a relative path is
+    # relative to the working directory, as --runs. With it, `steer steering-vectors` checks the file against this
+    # config and copies it into the run folder, and the run has no gradient pass (cli.py). None: the vectors come
+    # from the gradient pass of the run.
+    from_file: str | None = None
 
 
 class Steering(Section):
@@ -171,8 +176,10 @@ class Config(Section):
             if present:
                 raise ValueError(f"{', '.join(present)}: the ablation run does not read these; leave them out of a "
                                  f"config with an ablation section")
+        # With from_file the vectors come from the file, and `steer steering-vectors` checks the block there.
+        from_gradients = self.steering_vectors.from_file is None
         if self.steering is not None:
-            if self.steering.block not in self.gradients.blocks:
+            if from_gradients and self.steering.block not in self.gradients.blocks:
                 raise ValueError(f"steering.block: block {self.steering.block} is not in gradients.blocks")
             if 0 in self.steering.alphas:
                 raise ValueError("steering.alphas: leave out 0; the baseline always runs")
@@ -180,7 +187,7 @@ class Config(Section):
             if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
                 raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
         if self.ablation is not None:
-            if self.ablation.block not in self.gradients.blocks:
+            if from_gradients and self.ablation.block not in self.gradients.blocks:
                 raise ValueError(f"ablation.block: block {self.ablation.block} is not in gradients.blocks")
             if not self.ablation.seeds or len(set(self.ablation.seeds)) != len(self.ablation.seeds):
                 raise ValueError(f"ablation.seeds: need at least one seed and no repeats, got {self.ablation.seeds}")

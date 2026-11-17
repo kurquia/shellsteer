@@ -22,6 +22,10 @@ import numpy as np
 import scipy.linalg
 import torch
 
+# (classes, blocks, steps) S_C(t_k) in a vectors file; the sum over k is S (Eq. 21). Files from before it lack it.
+GRADIENT_RESPONSE_KEY = "gradient response per step"
+NETWORK_KEYS = ("hf_repo", "revision", "file")  # the network entries a vectors file is checked on
+
 Method = Literal["fkt", "fisher", "meandiff"]
 InTime = Literal["per_step", "constant"]
 Balance = Literal["equal", "by_count"]
@@ -131,24 +135,36 @@ def steering_vectors(moments: dict[str, np.ndarray], method: Method, in_time: In
 
 
 def save_steering_vectors(path: str | Path, vectors: np.ndarray, classes: np.ndarray, blocks: np.ndarray,
-                          metadata: dict) -> None:
-    """Write the vectors (classes, blocks, steps, 2, width), their classes and blocks, and the settings to one .npz."""
+                          metadata: dict, response_per_step: np.ndarray | None = None) -> None:
+    """Write the vectors (classes, blocks, steps, 2, width), their classes and blocks, and the settings to one .npz.
+
+    response_per_step: (classes, blocks, steps) S_C(t_k) of each vector (`gradient_responses_per_step`), stored so
+    that a run started from this file has S, the sum over k (Eq. 21), without the gradient pass. None stores none.
+    """
     if vectors.shape[:2] != (len(classes), len(blocks)):
         raise ValueError(f"vectors have shape {vectors.shape}, expected ({len(classes)} classes, {len(blocks)} "
                          f"blocks, steps, 2, width)")
-    np.savez(path, **{"steering vectors": vectors, "classes": np.asarray(classes), "blocks": np.asarray(blocks),
-                      "metadata": np.array(json.dumps(metadata, indent=1))})
+    arrays = {"steering vectors": vectors, "classes": np.asarray(classes), "blocks": np.asarray(blocks),
+              "metadata": np.array(json.dumps(metadata, indent=1))}
+    if response_per_step is not None:
+        if np.shape(response_per_step) != vectors.shape[:3]:
+            raise ValueError(f"response_per_step has shape {np.shape(response_per_step)}, expected "
+                             f"{vectors.shape[:3]} (classes, blocks, steps)")
+        arrays[GRADIENT_RESPONSE_KEY] = np.asarray(response_per_step, dtype=np.float64)
+    np.savez(path, **arrays)
 
 
-def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str, block: int) -> float:
-    """Sum over the Euler steps of the gradient response, sum over k of S_C(t_k) (paper Eq. 21).
+def gradient_response_per_step(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str,
+                                block: int) -> np.ndarray:
+    """(steps,) gradient response S_C(t_k) = G_C(t_k)^T xi(t_k) at each Euler step k; the sum over k is S (Eq. 21).
 
-    S_C(t_k) = G_C(t_k)^T xi(t_k), with G_C(t_k) = raw sum[C, block, k] / count[C] the mean of the raw gradients of
-    log m over the pairs of class C. To first order in alpha, the pole moves as M(alpha) = M(0) exp(alpha S), with
-    S this sum. The paper's value for the Z at block 1 is 0.122.
+    G_C(t_k) = raw sum[C, block, k] / count[C] is the mean of the raw gradients of log m over the pairs of class C.
+    To first order in alpha, the pole moves as M(alpha) = M(0) exp(alpha S). The paper's S for the Z at block 1 is
+    0.122.
 
     moments: the sums of gradients.py. xi: (steps, 2, width) steering vector, negative token first, as from
-    `load_steering_vector`; the raw sums hold the two tokens side by side in the same order.
+    `load_steering_vector`; the raw sums hold the two tokens side by side in the same order. A vector of in_time
+    `constant` has the same entries at every step, so it has the steps of the moments too.
     """
     names = [str(name) for name in moments["classes"]]
     blocks = [int(b) for b in moments["blocks"]]
@@ -167,7 +183,12 @@ def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Ten
                          f"{raw_sum.shape[1] // 2}) to match the moments")
     if not (np.isfinite(xi).all() and np.isfinite(raw_sum).all()):
         raise ValueError(f"xi or the raw sum of class {target!r} at block {block} has a non-finite entry")
-    return float(np.einsum("kw,kw->", raw_sum, xi.reshape(len(xi), -1)) / count)
+    return np.einsum("kw,kw->k", raw_sum, xi.reshape(len(xi), -1)) / count
+
+
+def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str, block: int) -> float:
+    """S of Eq. 21: the sum over the Euler steps k of `gradient_response_per_step`."""
+    return float(gradient_response_per_step(moments, xi, target, block).sum())
 
 
 def load_steering_vector(path: str | Path, target: str, block: int) -> torch.Tensor:
@@ -182,3 +203,91 @@ def load_steering_vector(path: str | Path, target: str, block: int) -> torch.Ten
         vector = data["steering vectors"][names.index(target), blocks.index(block)]
     return torch.from_numpy(vector.astype(np.float32))
 
+
+
+def gradient_responses_per_step(moments: dict[str, np.ndarray], vectors: np.ndarray) -> np.ndarray:
+    """(classes, blocks, steps) S_C(t_k) of the vector of each class and block of `steering_vectors(moments, ...)`.
+
+    The sum over the last axis is S of Eq. 21.
+    """
+    return np.array([[gradient_response_per_step(moments, vectors[c, b], str(name), int(block))
+                      for b, block in enumerate(moments["blocks"])] for c, name in enumerate(moments["classes"])])
+
+
+def load_gradient_response_per_step(path: str | Path, target: str, block: int) -> np.ndarray | None:
+    """(steps,) S_C(t_k) of the vector of class `target` at `block` stored in `path`; its sum is S (Eq. 21).
+
+    None if the file stores no response: a file written before `steer steering-vectors` stored it.
+    """
+    with np.load(path) as data:
+        if GRADIENT_RESPONSE_KEY not in data.files:
+            return None
+        names = [str(name) for name in data["classes"]]
+        blocks = [int(b) for b in data["blocks"]]
+        if target not in names or block not in blocks:
+            raise ValueError(f"{path} has no class {target!r} at block {block}; classes {names}, blocks {blocks}")
+        return data[GRADIENT_RESPONSE_KEY][names.index(target), blocks.index(block)].astype(np.float64)
+
+
+def check_steering_vectors_file(path: str | Path, *, method: Method, in_time: InTime, balance: Balance,
+                                classes: dict, blocks: list[int], steps: int, network_name: str,
+                                network: dict) -> list[str]:
+    """Stop if the vectors in `path` do not fit these settings; return what the file does not record.
+
+    classes: the classes section of the config (min_mass, windows). The file must hold the same class names, and the
+    same windows if it records them. blocks: each must be one of the file's blocks. steps, and the width of the
+    networks.yaml entry `network` named `network_name`: from the shape of the vectors, and the recorded steps if any.
+    hf_repo, revision, and file of `network` must equal the recorded ones if the file records a network. method,
+    in_time, and balance must be in the metadata and equal. A mismatch raises ValueError that names the key.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"{path} does not exist")
+    with np.load(path) as data:
+        missing = [key for key in ("steering vectors", "classes", "blocks", "metadata") if key not in data.files]
+        if missing:
+            raise ValueError(f"{path} has no {missing}; it is not a file of `steer steering-vectors`")
+        vectors = data["steering vectors"]
+        names = [str(name) for name in data["classes"]]
+        file_blocks = [int(b) for b in data["blocks"]]
+        metadata = json.loads(str(data["metadata"]))
+
+    for key, value in (("method", method), ("in_time", in_time), ("balance", balance)):
+        if key not in metadata:
+            raise ValueError(f"{path} records no {key}; cannot check it against steering_vectors.{key}")
+        if metadata[key] != value:
+            raise ValueError(f"steering_vectors.{key}: the config has {value!r}, {path} was made with "
+                             f"{metadata[key]!r}")
+    expected_names = [*classes["windows"], "rest"]
+    if sorted(names) != sorted(expected_names):
+        raise ValueError(f"classes: the config has the classes {expected_names}, {path} has {names}")
+    for block in blocks:
+        if block not in file_blocks:
+            raise ValueError(f"block: block {block} is not one of the blocks {file_blocks} of {path}")
+    width = network["width"]
+    if vectors.ndim != 5 or vectors.shape[:2] != (len(names), len(file_blocks)) or vectors.shape[3] != 2:
+        raise ValueError(f"{path}: the vectors have shape {vectors.shape}, expected ({len(names)} classes, "
+                         f"{len(file_blocks)} blocks, steps, 2, width)")
+    if vectors.shape[2] != steps or metadata.get("steps", steps) != steps:
+        raise ValueError(f"sampler.steps: the config has {steps} Euler steps, {path} has vectors for "
+                         f"{vectors.shape[2]} (recorded steps {metadata.get('steps', 'none')})")
+    if vectors.shape[4] != width:
+        raise ValueError(f"networks.{network_name}.width: the network has width {width}, the vectors in {path} have "
+                         f"{vectors.shape[4]}")
+    if not np.isfinite(vectors).all():
+        raise ValueError(f"{path}: the vectors have a non-finite entry")
+
+    unrecorded = []
+    if "classes" in metadata:
+        if metadata["classes"] != classes:
+            raise ValueError(f"classes: the config has {classes}, {path} was made with {metadata['classes']}")
+    else:
+        unrecorded.append("the class windows (classes.min_mass, classes.windows)")
+    if "network" in metadata:
+        for key in NETWORK_KEYS:
+            if metadata["network"].get(key) != network[key]:
+                raise ValueError(f"networks.{network_name}.{key}: the config has {network[key]!r}, {path} was made "
+                                 f"with {metadata['network'].get(key)!r}")
+    else:
+        unrecorded.append(f"the network ({', '.join(NETWORK_KEYS)})")
+    return unrecorded

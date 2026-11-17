@@ -20,8 +20,10 @@ configs/
     blocks_z.yaml        App. D: blocks 0 to 5
     quarkonia.yaml       App. D: J/psi and Upsilon
     all_muons.yaml       Fig. 3: every muon, all final states
+vectors/
+  main_block1.npz      the steering vectors of the main run at block 1 (Sec. 5), for steering_vectors.from_file
 examples/
-  run_paper_main.sh    one command per stage of the main run (Sec. 5)
+  run_paper_main.sh    one command per stage of the main run (Sec. 5); the runs of Figs. 3 and 5 from vectors/
   run_paper_ablation.sh  one command per stage of the mean ablation (Sec. 5.3)
 src/<package>/
   cli.py               steer <stage> CONFIG [--set key=value]...; steer all CONFIG runs the chain of the config
@@ -33,7 +35,8 @@ src/<package>/
                        the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
   activation_means.py  mean residual stream of the pair's tokens by class, and c_k of the mean ablation (Eq. 25)
-  steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with their metadata
+  steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with S (Eq. 21) and their metadata;
+                       the check of a vectors file against a config
   steered_generation.py  the edit at a block; generation of the pairs, steered or baseline; files per seed and alpha
   lineshape.py         the paper's fit of the Z lineshape: pole M and width Gamma of a mass spectrum
   luminosity.py        writes the luminosity table from the NNPDF4.0 grid file: python -m shellsteer.luminosity
@@ -53,12 +56,20 @@ A run writes to `runs/<name>/`, which git ignores. A config runs one of two chai
     mean ablation: gradients, steering-vectors, activation-means, ablate, ablation-readout, ablation-plots
                    (config with `ablation`)
 
+With `steering_vectors.from_file`, a run starts from the `steering_vectors.npz` of an earlier run. `steer
+steering-vectors` checks the file against the config (method, in_time, balance, classes, the edited block, Euler
+steps, token width, and the network and class windows if the file records them) and copies it into the run folder.
+The steering run then has no gradients stage. In the mean ablation, `steer gradients` makes only
+`directions_kept.npz`, the kept pairs that c_k needs, and no `gradient_moments.npz`. The readout takes S (Eq. 21)
+from the vectors file; for a file that stores no S, `readout.json` holds `null` with the reason, and Fig. 5 has no
+first-order line.
+
 ```
 runs/<name>/
   config.yaml          the resolved config of the run, overrides applied
   gradient_moments.npz per-class sums of the unit gradients, with their metadata         (gradients)
   directions_kept.npz  the class of each kept pair of the directions sample               (gradients)
-  steering_vectors.npz steering vectors and their metadata                                (steering-vectors)
+  steering_vectors.npz steering vectors, S of each class and block, and their metadata    (steering-vectors)
   generated/                                                                              (generate)
     kept.npz           the class of each kept pair of the steering sample, chosen on the first seed's baseline
     seed_<seed>/
@@ -83,6 +94,33 @@ read the real-data masses (`m_real`) of the kept pairs from the same files.
 Every stage that generates events counts the NaNs of the final state, of the four-momenta, and of the pair masses
 (`sampler.on_nan` in the config: set them to 0 as the paper, or stop). The counts appear in a `NaN:` log line and
 under "NaN counts" in the metadata of each file the stage writes.
+
+## Shipped vectors
+
+`vectors/main_block1.npz` holds the FKT vectors (per step, balance equal) of the classes Z, Jpsi, Upsilon, and rest
+at block 1: 200 Euler steps, 2 muon tokens of width 128, float64. It also holds their gradient response per step,
+whose sum is S (Eq. 21), and the full metadata: steps, class windows, network, and the settings of the gradient pass
+(1,040,000 events of the directions sample, seed 2040, 1,000,000 kept pairs, block 1 only).
+
+The full main run on one B200 made it, from the repository root:
+
+    steer all configs/paper/main_z_block1.yaml --set name=full_main --set 'gradients.blocks=[1]'
+
+Its steering-vectors stage wrote `runs/full_main/steering_vectors.npz` (md5 6283fc6f789a2b8a5d9ce47f9e3c2684) on
+2026-11-17. Three other runs of the same night (the ablation and the two Fig. 5 runs) wrote byte-identical files.
+That file records only the method, in_time, and balance. It was then rewritten with the code that stores the
+response per step:
+
+1. `steer steering-vectors` with the command above and `--runs` set to a folder that holds copies of
+   `config.yaml`, `gradient_moments.npz`, and `directions_kept.npz` of `runs/full_main`. This step wrote the
+   metadata.
+2. The `steering vectors`, `classes`, and `blocks` arrays are those of the old file, bit for bit. The recomputed
+   vectors on a 4-core machine differed from them by up to 1e-12, an effect of the BLAS threads. The response per
+   step is `gradient_responses_per_step` of the old vectors in float32, as the edit applies them, and of the
+   moments of `runs/full_main`. Its sum for the Z is 0.12227731427827616, 2.8e-17 below the readout's
+   0.12227731427827619.
+
+The md5 of the rewritten file is 91e41ce66268c3e57525c996b4852576.
 
 ## Rules
 
