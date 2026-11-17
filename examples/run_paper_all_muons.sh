@@ -21,12 +21,14 @@ steer gradients "$CONFIG"
 steer steering-vectors "$CONFIG"
 
 # Baseline and steered generation of sample C: seed 2041, alpha 0, -2, -1, +1, +2, every muon edited. GPU; on one
-# B200 about 14 min per alpha, 70 min in all; writes generated/, every particle of every event, about 200 MB per alpha.
+# B200 about 14 min per alpha, 70 min in all; writes generated/, every particle of every event and the decoded mass
+# of the massive types, about 260 MB per alpha.
 steer generate "$CONFIG"
 
-# Counts of p_T, eta, phi, and E of every particle type, and the largest change per bin (Sec. 5.1, App. D.1).
+# Counts of p_T, eta, phi, and E of every particle type, m of the massive types, and the largest change per bin
+# (Sec. 5.1, App. D.1).
 # CPU; a few minutes; writes kinematics.npz and kinematics_readout.json.
 steer kinematics-readout "$CONFIG"
 
-# Fig. 4 (muons) and Fig. 14 without its mass column (every other type). CPU; under a minute; writes plots/.
+# Fig. 4 (muons) and Fig. 14 (every other type). CPU; under a minute; writes plots/.
 steer kinematics-plots "$CONFIG"
