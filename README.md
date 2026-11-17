@@ -129,12 +129,13 @@ Its `generate` stage keeps every particle of each event, with the decoded mass o
 | `kinematics-plots` | Draws the kinematics of the edited muons (Fig. 4) and of every other particle type (Fig. 14) | `plots/kinematics.pdf`, `plots/all_particles.pdf` | CPU |
 
 The mean-ablation chain (`ablation_z.yaml`) runs `gradients` and `steering-vectors` as above, then four stages of its own.
+It ablates the steering sample; $\boldsymbol{\xi}_Z$ and the mean of Eq. 25 come from the directions sample.
 With `steering_vectors.from_file`, its `gradients` stage writes only `directions_kept.npz`, because the mean of Eq. 25 needs the kept pairs.
 
 | Stage | What it does | Writes | Device |
 |---|---|---|---|
 | `activation-means` | Sums the residual stream of the kept pairs per class, for the mean of Eq. 25 | `activation_means.npz` | GPU |
-| `ablate` | Generates `ablation.sample` without edits and with the mean ablation (Eq. 24), for each seed | `ablated/seed_<seed>/baseline.npz`, `ablated/seed_<seed>/block_<L>.npz` | GPU |
+| `ablate` | Generates the steering sample without edits and with the mean ablation (Eq. 24), for each seed, and keeps 1,000,000 pairs on the baseline of the first seed | `ablated/seed_<seed>/baseline.npz`, `ablated/seed_<seed>/block_<L>.npz`, `ablated/kept.npz` | GPU |
 | `ablation-readout` | Computes the spread and height of the target peak and the deviation below 60 GeV | `ablation_readout.json` | CPU |
 | `ablation-plots` | Draws the baseline, the mean ablation, and real data (Fig. 7) | `plots/ablation.pdf` | CPU |
 
@@ -253,7 +254,7 @@ At $\alpha = -2$ it is 0.112, and at $\alpha = +2$ it is 0.071.
 
 ### The ablation broadens the Z peak
 
-The mean ablation along $\boldsymbol{\xi}_Z$ at block 1 gives a Z peak about 18% broader, and the spectrum below 60 GeV stays within the sampling noise ($\mathcal{R}_{60} = 0.014$).
+The mean ablation along $\boldsymbol{\xi}_Z$ at block 1 gives a Z peak about 18% broader, and the spectrum below 60 GeV stays within the sampling noise ($\mathcal{R}_{60} = 0.012$).
 The same ablation along random directions broadens the Z peak by 1 to 4%.
 
 <p align="center">

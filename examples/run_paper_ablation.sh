@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The paper's mean ablation (Sec. 5.3, Eqs. 24 and 25, Fig. 7): the Z steering vector at block 1, ablated on the
-# directions sample for seeds 2040, 2041, and 2042. Outputs go to runs/ablation_z/.
+# steering sample for seeds 2041, 2042, and 2043, with xi_Z and c_k from the directions sample. Outputs go to
+# runs/ablation_z/.
 # Times and disk sizes are estimates from the code and from earlier runs on one NVIDIA B200, not measurements of
 # this script: 1,040,000 events per sample, 200 Euler steps, batch 8192, float32.
 # The GPU times are for one B200. `steer` uses every visible GPU (--devices chooses them); with n GPUs the GPU times
@@ -25,7 +26,8 @@ steer steering-vectors "$CONFIG"
 # block 1, the input of c_k (Eq. 25). GPU; about 10-20 min on one B200; writes activation_means.npz, about 2 MB.
 steer activation-means "$CONFIG"
 
-# Baseline and mean-ablated generation (Eq. 24) of the directions sample for each of the three seeds.
+# Baseline and mean-ablated generation (Eq. 24) of the steering sample for each of the three seeds; kept pairs from
+# the baseline of seed 2041 (ablated/kept.npz).
 # GPU; 6.2 million pairs, about 0.5-1.5 h on one B200; writes ablated/, about 50 MB per file, 300 MB in all.
 steer ablate "$CONFIG"
 

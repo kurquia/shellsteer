@@ -148,10 +148,15 @@
 \def\yb{-3.45}
 \def\yc{-6.90}
 
+% the mean ablation generates the steering sample again, with and without the ablation: drawn first, so that the
+% steering-sample cylinder and the steering generate box, drawn later, cover it
+\draw[flow] (\xd+0.55,2.30) -- (\xd+0.55,\yb+\boxh);
+
 % ---- inputs -----------------------------------------------------------------------------------------------------
 \node[data] (dir)  at (\xa,\ya) {directions sample\\{\smf 1,040,000 events}};
 \node[data] (ship) at (\xc,2.75) {\texttt{vectors/}\\\texttt{main\_block1.npz}};
 \node[data] (ste)  at (\xd,2.75) {steering sample\\{\smf 1,040,000 events}};
+\node[data] (allfs) at (\xc,\yc) {all final states\\{\smf 1,000,000 events}};
 \node[anchor=south, align=center, black!70, font=\fontsize{7}{8.2}\selectfont] at (\xa,0.80)
   {Hugging Face: event samples\\and the \texttt{ShellFlow} checkpoint};
 
@@ -176,24 +181,24 @@
 \stage{pl}{\xf,\ya}{steer}{plots}{\mockspectrum}{c}{plots/}
 
 % ---- kinematics chain -------------------------------------------------------------------------------------------
-\stage{kgen}{\xd,\yb}{kin}{generate}{\noisetodata{0}}{g}{generated/}
-\stage{kro}{\xe,\yb}{kin}{kinematics-readout}{%
+\stage{kgen}{\xd,\yc}{kin}{generate}{\noisetodata{0}}{g}{generated/}
+\stage{kro}{\xe,\yc}{kin}{kinematics-readout}{%
   \node at (0,0.28) {$\displaystyle\max_{b}\,\Big|\frac{N_b}{N_b^{\mathrm{base}}}-1\Big|$};
   \node[sm] at (0,-0.42) {per particle type and variable};
 }{c}{kinematics.npz}
-\stage{kpl}{\xf,\yb}{kin}{kinematics-plots}{\mockkinematics}{c}{plots/}
+\stage{kpl}{\xf,\yc}{kin}{kinematics-plots}{\mockkinematics}{c}{plots/}
 
 % ---- mean-ablation chain ----------------------------------------------------------------------------------------
-\stage{am}{\xc,\yc}{abl}{activation-means}{%
+\stage{am}{\xc,\yb}{abl}{activation-means}{%
   \node at (0,0.24) {$c_k=\big\langle\bxi_Z(t_k)^{\top}\bh_L^{\mu}(t_k)\big\rangle_p$};
   \node[sm] at (0,-0.40) {mean over all pairs, without edits};
 }{g}{activation\_means.npz}
-\stage{ab}{\xd,\yc}{abl}{ablate}{%
+\stage{ab}{\xd,\yb}{abl}{ablate}{%
   % 7.2 pt: at the 8 pt of the other boxes the equation is as wide as the box
   \node[font=\fontsize{7.2}{8.6}\selectfont] at (0,0.22) {$\bh_L^{\mu}\to\bh_L^{\mu}-\big[\bxi_Z^{\top}\bh_L^{\mu}-c_k\big]\,\bxi_Z$};
-  \node[sm] at (0,-0.40) {directions sample, with and without};
+  \node[sm] at (0,-0.40) {steering sample, with and without};
 }{g}{ablated/}
-\stage{aro}{\xe,\yc}{abl}{ablation-readout}{%
+\stage{aro}{\xe,\yb}{abl}{ablation-readout}{%
   % one row per number of ablation_readout.json: the quantity, then what it measures
   \node at (0,-0.03) {\renewcommand{\arraystretch}{1.55}%
     \begin{tabular}{@{}r@{\hspace{6pt}}l@{}}
@@ -202,16 +207,16 @@
       $\mathcal{R}_{60}$ & {\smf below 60 GeV}
     \end{tabular}};
 }{c}{ablation\_readout.json}
-\stage{apl}{\xf,\yc}{abl}{ablation-plots}{\mockablation}{c}{plots/}
+\stage{apl}{\xf,\yb}{abl}{ablation-plots}{\mockablation}{c}{plots/}
 
 % ---- the paper figures ------------------------------------------------------------------------------------------
 \node[fig, anchor=west] (f3) at (\xg,\ya) {\includegraphics[height=2.45cm]{fig3_spectrum.png}};
 \node[fig, anchor=west] (f5) at ($(f3.east)+(0.12,0)$) {\includegraphics[height=2.45cm]{fig5_pole_width.png}};
 \node[figlabel] at (f3.south) {Fig.~3};
 \node[figlabel] at (f5.south) {Fig.~5};
-\node[fig, anchor=west] (f4) at (\xg,\yb) {\includegraphics[height=2.45cm]{fig4_kinematics.png}};
+\node[fig, anchor=west] (f4) at (\xg,\yc) {\includegraphics[height=2.45cm]{fig4_kinematics.png}};
 \node[figlabel] at (f4.south) {Fig.~4 (and 14)};
-\node[fig, anchor=west] (f7) at (\xg,\yc) {\includegraphics[height=2.45cm]{fig7_ablation.png}};
+\node[fig, anchor=west] (f7) at (\xg,\yb) {\includegraphics[height=2.45cm]{fig7_ablation.png}};
 \node[figlabel] at (f7.south) {Fig.~7};
 
 % ---- chain labels -----------------------------------------------------------------------------------------------
@@ -229,16 +234,17 @@
 \draw[flow] (pl) -- (f3);
 \draw[flow] (ste) -- (gen);
 
-\draw[flow] (\trunk,\ya) -- (\trunk,\yc+0.25) -- (ab.west |- 0,\yc+0.25);
-\draw[flow] (\trunk,\yb) -- (kgen.west);
+\draw[flow] (\trunk,\ya) -- (\trunk,\yc+0.25) -- (kgen.west |- 0,\yc+0.25);
+\draw[flow] (\trunk,\yb+0.25) -- (ab.west |- 0,\yb+0.25);
 \fill (\trunk,\ya) circle (1.8pt);
-\fill (\trunk,\yb) circle (1.8pt);
+\fill (\trunk,\yb+0.25) circle (1.8pt);
+\draw[flow] (allfs.east |- 0,\yc-0.25) -- (kgen.west |- 0,\yc-0.25);
 \draw[flow] (kgen) -- (kro);
 \draw[flow] (kro) -- (kpl);
 \draw[flow] (kpl) -- (f4);
 
-\draw[flow] (grad.south) -- (\xb,\yc) -- (am.west);
-\draw[flow] (am.east |- 0,\yc-0.25) -- (ab.west |- 0,\yc-0.25);
+\draw[flow] (grad.south) -- (\xb,\yb) -- (am.west);
+\draw[flow] (am.east |- 0,\yb-0.25) -- (ab.west |- 0,\yb-0.25);
 \draw[flow] (ab) -- (aro);
 \draw[flow] (aro) -- (apl);
 \draw[flow] (apl) -- (f7);

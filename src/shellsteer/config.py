@@ -7,7 +7,7 @@ A config runs one of three chains (cli.py), and `Config.chain` says which:
 
     steering:   steering, readout, lineshape, and plots; the steering sample holds muon pairs.
     kinematics: steering and kinematics; the steering sample holds every final state (events.steering_dataset).
-    ablation:   ablation and readout.
+    ablation:   ablation and readout; the steering sample holds muon pairs.
 
 Each chain needs its own sections and stops on the sections of the others.
 """
@@ -116,9 +116,9 @@ class AblationFigure(Section):
 
 
 class Ablation(Section):
-    """The mean ablation of paper Sec. 5.3: the target's steering vector at `block`, c_k from the directions sample."""
+    """The mean ablation of paper Sec. 5.3 (Eq. 24) of the steering sample: the target's steering vector at `block`,
+    xi and c_k (Eq. 25) from the directions sample."""
     block: int
-    sample: Literal["directions", "steering"]
     seeds: list[int]
     peak_range: list[float]          # GeV: the histogram of the peak height, and the bins of the inset of paper Fig. 7
     peak_bins: int
@@ -258,8 +258,8 @@ class Config(Section):
             if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
                 raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
         if self.ablation is not None:
-            if self.ablation.sample == "steering" and self.dataset("steering").pair is None:
-                raise ValueError(f"ablation.sample: the steering sample {self.events.steering_dataset!r} has no "
+            if self.dataset("steering").pair is None:
+                raise ValueError(f"ablation: the steering sample {self.events.steering_dataset!r} has no "
                                  f"pairs, and the ablation edits the pair's tokens")
             if from_gradients and self.ablation.block not in self.gradients.blocks:
                 raise ValueError(f"ablation.block: block {self.ablation.block} is not in gradients.blocks")

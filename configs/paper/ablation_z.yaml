@@ -1,4 +1,5 @@
-# Paper Sec. 5.3: mean ablation of the Z steering vector at block 1 (Eq. 24), with c_k from Eq. 25.
+# Paper Sec. 5.3: mean ablation of the Z steering vector at block 1 (Eq. 24), with c_k from Eq. 25. The ablation runs
+# on the steering sample; xi_Z and c_k come from the directions sample.
 # The sections up to steering_vectors are those of main_z_block1.yaml. Run with `steer all` (cli.py, ablation chain).
 
 name: ablation_z
@@ -33,13 +34,13 @@ steering_vectors:
   in_time: per_step                 # per_step | constant
   balance: equal                    # equal | by_count
 
-# The mean ablation of Eq. 24 on the pair's two tokens at the output of block L, at every Euler step.
+# The mean ablation of Eq. 24 on the pair's two tokens at the output of block L, at every Euler step, on the steering
+# sample: baseline and ablated generation for each seed, kept pairs from the baseline of the first seed.
 # c_k (Eq. 25): mean of xi(t_k) . h_L over the kept pairs of every class of the directions sample, one forward pass
 # without edits with the noise of gradients.seed (activation_means.npz).
 ablation:
   block: 1
-  sample: directions                # directions | steering: the events ablated and generated again as baseline
-  seeds: [2040, 2041, 2042]
+  seeds: [2041, 2042, 2043]         # the seeds of the steering runs (Sec. 5.1)
   peak_range: [50, 140]             # GeV; the Z peak: the change of its height, and the bins of the inset of Fig. 7
   peak_bins: 100
   figure:                           # Fig. 7 (steer ablation-plots)
