@@ -255,7 +255,7 @@ def save_generated_events(path: str | Path, generated: GeneratedEvents, metadata
         metadata = {**metadata, "NaN counts": generated.nans.metadata()}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    mass = {} if generated.mass is None else {"mass": generated.mass}
+    mass = {} if generated.mass is None else {"decoded_mass": generated.mass}   # "mass": pair mass, load_generated
     np.savez(path, **{"four-momenta": generated.four_momenta, "particle_type": generated.particle_type,
                       "particle_charge": generated.particle_charge, "particle_mask": generated.particle_mask,
                       "event": generated.event, **mass, "metadata": np.array(json.dumps(metadata, indent=1))})
@@ -269,7 +269,8 @@ def load_generated_events(path: str | Path) -> tuple[GeneratedEvents, dict]:
             raise ValueError(f"{path} holds pairs, not every particle of each event; read it with load_generated")
         generated = GeneratedEvents(four_momenta=data["four-momenta"], particle_type=data["particle_type"],
                                     particle_charge=data["particle_charge"], particle_mask=data["particle_mask"],
-                                    event=data["event"], mass=data["mass"] if "mass" in data.files else None)
+                                    event=data["event"],
+                                    mass=data["decoded_mass"] if "decoded_mass" in data.files else None)
         metadata = json.loads(str(data["metadata"]))
     return generated, metadata
 
