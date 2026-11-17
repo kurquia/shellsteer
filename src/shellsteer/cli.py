@@ -18,14 +18,15 @@ import re
 import shutil
 import sys
 import time
+import types
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Union, get_args, get_origin
 
 import numpy as np
 import torch
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from shellsteer.activation_means import (activation_means, load_activation_means, mean_projection,
                                          save_activation_means)
@@ -38,6 +39,7 @@ from shellsteer.metrics import (below_mass_deviation, log_bin_edges, peak_height
 from shellsteer.networks import load_network
 from shellsteer.plots import (ablation_figure, pole_and_width_figure, save, selectivity_figure,
                               steered_spectrum_figure)
+from shellsteer.sampler import NanError
 from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_pairs,
                                            generated_path, kept_path, load_generated, load_kept, save_generated,
                                            save_kept)
@@ -105,6 +107,27 @@ def read_config(path: str | Path, overrides: list[str]) -> Config:
     return config
 
 
+def with_defaults(raw: Any, model: type[BaseModel]) -> Any:
+    """`raw`, a dump of `model`, with each key it lacks set to the key's default in `model`, in nested sections too.
+
+    A config.yaml written before a key with a default existed then compares equal to a config that keeps the default.
+    So a key added later must default to what the code did before it, as sampler.on_nan does.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    filled = dict(raw)
+    for name, field in model.model_fields.items():
+        if name not in filled:
+            if not field.is_required():
+                filled[name] = field.get_default(call_default_factory=True)
+            continue
+        options = get_args(field.annotation) if get_origin(field.annotation) in (Union, types.UnionType) else ()
+        section = [t for t in (field.annotation, *options) if isinstance(t, type) and issubclass(t, BaseModel)]
+        if section:
+            filled[name] = with_defaults(filled[name], section[0])
+    return filled
+
+
 def differing_keys(old: Any, new: Any, prefix: str = "") -> list[str]:
     """Dotted paths at which two config dumps differ."""
     if isinstance(old, dict) and isinstance(new, dict):
@@ -149,27 +172,32 @@ def run_gradients(config: Config, run: Path, device: str) -> None:
     network = load_network(config.networks[config.network], device)
     directions = load_events(entry, "directions", config.events.directions)
     log(stage, f"{len(directions):,} events of the directions sample, device {device}")
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device)
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
+                 on_nan=config.sampler.on_nan)
     start = time.perf_counter()
-    baseline = generate_pairs(network, directions, None, seed=config.gradients.seed, **sizes).mass
-    kept = select(baseline, directions.priority, config.classes, config.events.keep)
+    baseline = generate_pairs(network, directions, None, seed=config.gradients.seed, **sizes)
+    kept = select(baseline.mass, directions.priority, config.classes, config.events.keep)
     names = class_names(config.classes)
     log(stage, f"baseline of seed {config.gradients.seed} in {time.perf_counter() - start:.1f} s; kept "
                f"{config.events.keep:,} pairs: {class_counts(kept, names)}")
+    log(stage, f"baseline of seed {config.gradients.seed}: {baseline.nans.text()}")
     start = time.perf_counter()
-    moments = gradient_moments(network, directions, kept, config.classes, blocks=list(config.gradients.blocks),
-                               seed=config.gradients.seed, **sizes)
+    moments, nans = gradient_moments(network, directions, kept, config.classes, blocks=list(config.gradients.blocks),
+                                     seed=config.gradients.seed, **sizes)
     counts = ", ".join(f"{name} {int(n):,}" for name, n in zip(moments["classes"], moments["count"]))
     log(stage, f"gradient pass in {time.perf_counter() - start:.1f} s; pairs per class: {counts}; "
                f"non-finite pairs {int(moments['non-finite pairs']):,}")
+    log(stage, f"gradient pass: {nans.text()}")
     metadata = {"steps": config.sampler.steps, "batch_size": config.sampler.batch_size,
                 "seed": config.gradients.seed, "blocks": list(config.gradients.blocks), "keep": config.events.keep,
                 "events": config.events.directions, "device": device,
-                "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump()}
+                "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump(),
+                "NaN counts": nans.metadata(), "NaN counts of the baseline": baseline.nans.metadata()}
     save_moments(run / MOMENTS_FILE, moments, metadata)
     log(stage, f"wrote {run / MOMENTS_FILE}")
     save_kept(run / DIRECTIONS_KEPT_FILE, kept, directions.event,
-              {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions", "device": device})
+              {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions", "device": device,
+               "NaN counts": baseline.nans.metadata()})
     log(stage, f"wrote {run / DIRECTIONS_KEPT_FILE}")
 
 
@@ -200,7 +228,8 @@ def run_generate(config: Config, run: Path, device: str) -> None:
     log(stage, f"{len(events):,} events of the steering sample, device {device}; {config.target} vector at block "
                f"{config.steering.block}; seeds {list(config.steering.seeds)}, alphas {list(alphas)}")
     edit_steps = None if config.steering.steps == "all" else tuple(config.steering.steps)
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device)
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
+                 on_nan=config.sampler.on_nan)
     for seed in config.steering.seeds:
         for alpha in alphas:
             edit = None if alpha == 0 else Edit(xi=xi, alpha=alpha, block=config.steering.block,
@@ -209,6 +238,7 @@ def run_generate(config: Config, run: Path, device: str) -> None:
             start = time.perf_counter()
             generated = generate_pairs(network, events, edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
+            log(stage, f"seed {seed}, alpha {alpha:+g}: {generated.nans.text()}")
             if seed == config.steering.seeds[0] and alpha == 0:
                 kept = select(generated.mass, events.priority, config.classes, config.events.keep)
                 save_kept(kept_path(run), kept, generated.event, {"seed": seed, "keep": config.events.keep})
@@ -383,16 +413,18 @@ def run_activation_means(config: Config, run: Path, device: str) -> None:
     log(stage, f"{len(events):,} events of the directions sample, device {device}; block {config.ablation.block}, "
                f"seed {config.gradients.seed}")
     start = time.perf_counter()
-    means = activation_means(network, events, kept, config.classes, blocks=[config.ablation.block],
-                             steps=config.sampler.steps, batch_size=config.sampler.batch_size,
-                             seed=config.gradients.seed, device=device)
+    means, nans = activation_means(network, events, kept, config.classes, blocks=[config.ablation.block],
+                                   steps=config.sampler.steps, batch_size=config.sampler.batch_size,
+                                   seed=config.gradients.seed, device=device, on_nan=config.sampler.on_nan)
     counts = ", ".join(f"{name} {int(n):,}" for name, n in zip(means["classes"], means["count"]))
     log(stage, f"forward pass in {time.perf_counter() - start:.1f} s; pairs per class: {counts} (total "
                f"{int(np.sum(means['count'])):,}); non-finite pairs {int(means['non-finite pairs']):,}")
+    log(stage, nans.text())
     save_activation_means(run / MEANS_FILE, means, {
         "steps": config.sampler.steps, "batch_size": config.sampler.batch_size, "seed": config.gradients.seed,
         "blocks": [config.ablation.block], "kept pairs file": DIRECTIONS_KEPT_FILE, "device": device,
-        "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump()})
+        "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump(),
+        "NaN counts": nans.metadata()})
     log(stage, f"wrote {run / MEANS_FILE}")
 
 
@@ -419,12 +451,14 @@ def run_ablate(config: Config, run: Path, device: str) -> None:
     log(stage, f"{len(events):,} events of the {ablation.sample} sample, device {device}; {config.target} vector at "
                f"block {ablation.block}; seeds {list(ablation.seeds)}")
     edit = Ablation(xi=xi, mean=torch.from_numpy(c), block=ablation.block)
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device)
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
+                 on_nan=config.sampler.on_nan)
     for seed in ablation.seeds:
         for block in blocks:
             start = time.perf_counter()
             generated = generate_pairs(network, events, None if block is None else edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
+            log(stage, f"seed {seed}, {'baseline' if block is None else f'block {block}'}: {generated.nans.text()}")
             if ablation.sample == "steering" and seed == ablation.seeds[0] and block is None:
                 kept = select(generated.mass, events.priority, config.classes, config.events.keep)
                 save_kept(run / ABLATED_KEPT_FILE, kept, generated.event, {"seed": seed, "keep": config.events.keep,
@@ -619,7 +653,8 @@ def prepare(stage: Stage, config: Config, run: Path, overwrite: bool, warn_later
     for done in needed:
         for out in done.outputs:
             require(run / out, done.name)
-    changed = differing_keys(yaml.safe_load(config_path.read_text()), new) if config_path.exists() else []
+    changed = (differing_keys(with_defaults(yaml.safe_load(config_path.read_text()), Config), new)
+               if config_path.exists() else [])
     if needed and not config_path.exists():
         raise StageError(f"{run} has the output of `steer {needed[0].name}` but no {CONFIG_FILE}; start a new run "
                          f"with --set name=<new name>")
@@ -695,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
             check_device(device)
         for stage in stages:
             run_stage(stage, config, run, device, args.overwrite, warn_later=args.stage != "all")
-    except (StageError, ValidationError) as error:
+    except (StageError, ValidationError, NanError) as error:
         print(f"steer {args.stage}: {error}", file=sys.stderr)
         return 1
     return 0

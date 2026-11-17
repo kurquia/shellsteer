@@ -24,7 +24,7 @@ from shellsteer.config import Classes
 from shellsteer.events import Events, batches, class_names, class_of, log_pair_mass, pair_mass_squared
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import Network
-from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
 
 
 def unit(x: torch.Tensor) -> torch.Tensor:
@@ -34,8 +34,10 @@ def unit(x: torch.Tensor) -> torch.Tensor:
 
 
 def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
-                     steps: int, batch_size: int, seed: int, device: str | torch.device) -> dict[str, np.ndarray]:
-    """Run the gradient pass over every event of `events` and return the per-class sums of the module docstring.
+                     steps: int, batch_size: int, seed: int, device: str | torch.device,
+                     on_nan: OnNan = "set_to_zero") -> tuple[dict[str, np.ndarray], NanCounts]:
+    """Run the gradient pass over every event of `events`; return the per-class sums of the module docstring and the
+    NaN counts of the generation (`sampler.generate` with `on_nan`).
 
     kept: (E,) class of each pair from `events.select`, "" for pairs left out.
     A kept pair enters the class of the mass of this pass, which is the baseline mass when the pass runs on the same
@@ -53,6 +55,7 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
     summed_raw_sum = torch.zeros(n_classes, n_blocks, width, **f64)
     count = np.zeros(n_classes, dtype=np.int64)
     non_finite = 0
+    nans = []
 
     for index, batch, minus, plus in batches(events, batch_size, device):
         rows = slice(index * batch_size, index * batch_size + len(minus))
@@ -60,15 +63,18 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
         with ExitStack() as stack:
             for block, probe in zip(blocks, probes):
                 stack.enter_context(attach(network, block, probe))
-            p4 = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps, grad=True,
-                          on_step=on_step(*probes))
+            generated = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps, on_nan=on_nan,
+                                 label=f"batch {index} of the gradient pass, seed {seed}", grad=True,
+                                 on_step=on_step(*probes))
+            p4 = generated.four_momenta
             log_m = log_pair_mass(p4, minus, plus)
             grads = torch.autograd.grad(log_m.sum(), [probe.delta for probe in probes])
 
         finite = torch.stack([grad.isfinite().flatten(-2).all(-1).all(0) for grad in grads]).all(0)
         non_finite += int((~finite).sum())
-        mass = pair_mass_squared(p4, minus, plus).detach().clamp(min=1e-6).sqrt().double().cpu().numpy()
-        pair_class = class_of(mass, classes)
+        mass = pair_mass_squared(p4, minus, plus).detach().clamp(min=1e-6).sqrt()
+        nans.append(NanCounts.of_batch(generated, mass))
+        pair_class = class_of(mass.double().cpu().numpy(), classes)
         pair_class[(kept[rows] == "") | ~finite.cpu().numpy()] = ""
         members = [torch.from_numpy(np.flatnonzero(pair_class == name)).to(device) for name in names]
         count += [len(m) for m in members]
@@ -91,7 +97,7 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
                 summed_raw_sum[c, b] += summed[m].sum(0)
             del g, summed, u, u_summed
 
-    return {
+    moments = {
         "classes": np.array(names), "blocks": np.array(blocks), "count": count,
         "non-finite pairs": np.array(non_finite),
         "unit second moment": second.cpu().numpy(), "unit sum": unit_sum.cpu().numpy(),
@@ -99,6 +105,7 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
         "step-summed unit second moment": summed_second.cpu().numpy(),
         "step-summed unit sum": summed_unit_sum.cpu().numpy(), "step-summed raw sum": summed_raw_sum.cpu().numpy(),
     }
+    return moments, NanCounts(on_nan, events.event, np.concatenate(nans))
 
 
 def save_moments(path: str | Path, moments: dict[str, np.ndarray], metadata: dict) -> None:

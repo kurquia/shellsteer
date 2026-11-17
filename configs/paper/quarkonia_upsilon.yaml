@@ -21,6 +21,7 @@ sampler:
   steps: 200
   batch_size: 8192
   precision: float32
+  on_nan: set_to_zero               # set_to_zero (as the paper) | stop: stop on a NaN; NaNs are counted either way
 
 # Gradients of log m of the pair with respect to the residual stream, on the directions sample.
 gradients:
