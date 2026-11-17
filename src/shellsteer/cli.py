@@ -2,15 +2,17 @@
 
 A config runs one of three chains of stages (STAGES, `Config.chain`): the steering run (Sec. 5); the kinematics run
 (Figs. 4 and 14), whose steering sample holds events of every final state; or, with an `ablation` section, the mean
-ablation (Sec. 5.3). A run writes to <runs>/<config name>/ (README, "Run the full chain"). Each stage reads only the
-files of the stages it needs and stops, naming the missing file and the stage that writes it, if one is absent. A
-stage refuses to replace its own output unless --overwrite is given, and refuses to run on outputs that were made
-with other settings. The resolved config, overrides applied, goes to config.yaml in the run folder; the log to stdout.
+ablation (Sec. 5.3) of the steering sample, with xi and c_k (Eq. 25) from the directions sample. A run writes to
+<runs>/<config name>/ (README, "Run the full chain"). Each stage reads only the files of the stages it needs and
+stops, naming the missing file and the stage that writes it, if one is absent. A stage refuses to replace its own
+output unless --overwrite is given, and refuses to run on outputs that were made with other settings. The resolved
+config, overrides applied, goes to config.yaml in the run folder; the log to stdout.
 
 With steering_vectors.from_file, the vectors come from a file of an earlier `steer steering-vectors` (stages_of):
 `steer steering-vectors` checks the file against the config and copies it into the run folder, the steering and
-kinematics runs have no gradients stage, and in the ablation run `steer gradients` makes only the baseline and the kept pairs of the
-directions sample, which c_k needs. S (Eq. 21) then comes from the file, or the readout reports it as unavailable.
+kinematics runs have no gradients stage, and in the ablation run `steer gradients` makes only the baseline and the kept
+pairs of the directions sample, which c_k needs. S (Eq. 21) then comes from the file, or the readout reports it as
+unavailable.
 
 The readouts write JSON: a few numbers per seed, which a person can read and any language can load. The lineshape
 fit is a model of the Z (App. E) and runs only when the target is Z.
@@ -63,7 +65,7 @@ MOMENTS_FILE = "gradient_moments.npz"
 DIRECTIONS_KEPT_FILE = "directions_kept.npz"
 MEANS_FILE = "activation_means.npz"
 ABLATED_DIR = "ablated"
-ABLATED_KEPT_FILE = "ablated/kept.npz"   # the kept pairs of the steering sample when the ablation runs on it
+ABLATED_KEPT_FILE = "ablated/kept.npz"   # the kept pairs of the steering sample on the first seed's baseline
 ABLATION_READOUT_FILE = "ablation_readout.json"
 VECTORS_FILE = "steering_vectors.npz"
 GENERATED_DIR = "generated"
@@ -480,14 +482,6 @@ def run_plots(config: Config, run: Path, devices: Devices) -> None:
         log(stage, f"wrote {folder / name}")
 
 
-def ablation_kept_file(config: Config, run: Path) -> tuple[Path, str]:
-    """The kept pairs of the ablated sample and the stage that writes them: the directions sample's from `steer
-    gradients`, the steering sample's from `steer ablate` on the baseline of its first seed."""
-    if config.ablation.sample == "directions":
-        return run / DIRECTIONS_KEPT_FILE, "gradients"
-    return run / ABLATED_KEPT_FILE, "ablate"
-
-
 def run_activation_means(config: Config, run: Path, devices: Devices) -> None:
     """Mean of the residual stream on the pair's tokens over the kept pairs of the directions sample, the input of
     c_k (paper Eq. 25): one forward pass without edits with the noise of gradients.seed."""
@@ -520,7 +514,8 @@ def run_activation_means(config: Config, run: Path, devices: Devices) -> None:
 
 
 def run_ablate(config: Config, run: Path, devices: Devices) -> None:
-    """Baseline and mean-ablated generation (paper Eq. 24, c_k of Eq. 25) of ablation.sample for every seed."""
+    """Baseline and mean-ablated generation (paper Eq. 24) of the steering sample for every seed, with xi and c_k
+    (Eq. 25) from the directions sample."""
     stage = "ablate"
     ablation = config.ablation
     blocks = (None, ablation.block)                                    # None: the baseline
@@ -530,15 +525,10 @@ def run_ablate(config: Config, run: Path, devices: Devices) -> None:
     c = mean_projection(means, xi, ablation.block)
     log(stage, f"c_k from {int(np.sum(means['count'])):,} pairs: {c.min():+.4f} to {c.max():+.4f} over "
                f"{len(c)} steps")
-    entry = config.dataset(ablation.sample)
-    events = load_events(entry, ablation.sample, getattr(config.events, ablation.sample))
-    if ablation.sample == "directions":
-        kept_file = require(run / DIRECTIONS_KEPT_FILE, "gradients")
-        if not np.array_equal(events.event, load_kept(kept_file)[1]):
-            raise StageError(f"the directions sample holds other events than {kept_file}; rerun `steer gradients "
-                             f"--overwrite`")
+    entry = config.dataset("steering")
+    events = load_events(entry, "steering", config.events.steering)
     workers = start_workers(stage, config, devices)
-    log(stage, f"{len(events):,} events of the {ablation.sample} sample; {config.target} vector at "
+    log(stage, f"{len(events):,} events of the steering sample; {config.target} vector at "
                f"block {ablation.block}; seeds {list(ablation.seeds)}")
     edit = Ablation(xi=xi, mean=torch.from_numpy(c), block=ablation.block)
     sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, on_nan=config.sampler.on_nan)
@@ -548,7 +538,7 @@ def run_ablate(config: Config, run: Path, devices: Devices) -> None:
             generated = generate_pairs(workers, events, None if block is None else edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
             log(stage, f"seed {seed}, {'baseline' if block is None else f'block {block}'}: {generated.nans.text()}")
-            if ablation.sample == "steering" and seed == ablation.seeds[0] and block is None:
+            if seed == ablation.seeds[0] and block is None:
                 kept = select(generated.mass, events.priority, config.classes, config.events.keep)
                 save_kept(run / ABLATED_KEPT_FILE, kept, generated.event, {"seed": seed, "keep": config.events.keep,
                                                                             "sample": "steering"})
@@ -557,7 +547,7 @@ def run_ablate(config: Config, run: Path, devices: Devices) -> None:
             path = paths[(seed, block)]
             save_generated(path, generated, {
                 "block": block, "target": config.target, "method": config.steering_vectors.method, "seed": seed,
-                "steps": config.sampler.steps, "sample": ablation.sample, "steering vector file": VECTORS_FILE,
+                "steps": config.sampler.steps, "sample": "steering", "steering vector file": VECTORS_FILE,
                 "activation means file": MEANS_FILE, "c_k": c.tolist(), "batch_size": config.sampler.batch_size,
                 "device": devices_metadata(devices), "network": config.networks[config.network].model_dump(),
                 "dataset": entry.model_dump()}, required=ABLATION_METADATA_KEYS)
@@ -584,8 +574,8 @@ def run_ablation_readout(config: Config, run: Path, devices: Devices) -> None:
     and the deviation below readout.r60_max_mass, per seed and over seeds (metrics.py)."""
     stage = "ablation-readout"
     ablation, readout, classes = config.ablation, config.readout, config.classes
-    kept_file, kept_stage = ablation_kept_file(config, run)
-    kept, kept_event, _ = load_kept(require(kept_file, kept_stage))
+    kept_file = run / ABLATED_KEPT_FILE
+    kept, kept_event, _ = load_kept(require(kept_file, "ablate"))
     for seed in ablation.seeds:
         for block in (None, ablation.block):
             require(ablated_path(run, seed, block), "ablate")
@@ -620,7 +610,7 @@ def run_ablation_readout(config: Config, run: Path, devices: Devices) -> None:
     mean = {key: (np.mean(base_list, axis=0), np.mean(ablated_list, axis=0))
             for key, (base_list, ablated_list) in histograms.items()}
     result = {
-        "target": config.target, "block": ablation.block, "sample": ablation.sample, "seeds": list(ablation.seeds),
+        "target": config.target, "block": ablation.block, "sample": "steering", "seeds": list(ablation.seeds),
         "target window": list(window), "kept pairs file": kept_file.name,
         "spread ratio, mean over seeds": float(np.mean([r["spread of log m in the target window"]["ratio"]
                                                         for r in rows])),
@@ -642,10 +632,10 @@ def run_ablation_plots(config: Config, run: Path, devices: Devices) -> None:
     """Paper Fig. 7: the spectrum of the baseline, the mean ablation, and real data, counts averaged over seeds."""
     stage = "ablation-plots"
     ablation, readout = config.ablation, config.readout
-    kept_file, kept_stage = ablation_kept_file(config, run)
-    kept, kept_event, _ = load_kept(require(kept_file, kept_stage))
+    kept_file = run / ABLATED_KEPT_FILE
+    kept, kept_event, _ = load_kept(require(kept_file, "ablate"))
     pairs = [ablated_masses(config, run, seed, kept, kept_event, kept_file) for seed in ablation.seeds]
-    real = real_masses(config, ablation.sample, kept_event, kept_file, kept_stage)[kept != ""]
+    real = real_masses(config, "steering", kept_event, kept_file, "ablate")[kept != ""]
     log(stage, f"seeds {list(ablation.seeds)}: {', '.join(f'{len(b):,}' for b, _ in pairs)} pairs; real data of the "
                f"{len(real):,} kept pairs")
     settings = ablation.figure
@@ -774,8 +764,8 @@ STAGES = (
           run_activation_means, "mean residual stream of the kept pairs of the directions sample, for c_k "
                                 "(Eq. 25); GPU"),
     Stage("ablate", ("ablation",), ("steering-vectors", "activation-means"), (ABLATED_DIR,),
-          ("ablation.sample", "ablation.seeds"), True, run_ablate,
-          "baseline and mean-ablated generation (Eq. 24) of ablation.sample, every seed (Sec. 5.3); GPU"),
+          ("ablation.seeds",), True, run_ablate,
+          "baseline and mean-ablated generation (Eq. 24) of the steering sample, every seed (Sec. 5.3); GPU"),
     Stage("ablation-readout", ("ablation",), ("ablate",), (ABLATION_READOUT_FILE,),
           ("readout", "ablation.peak_range", "ablation.peak_bins"), False, run_ablation_readout,
           "spread and height of the target peak and the deviation below 60 GeV under the ablation (Sec. 5.3); CPU"),

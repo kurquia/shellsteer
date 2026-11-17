@@ -20,8 +20,7 @@ particle of every event. `save_generated_events` writes them to the same generat
 there is no kept.npz.
 
 The mean ablation (paper Sec. 5.3) is the edit `Ablation`; its c_k come from `activation_means.mean_projection`.
-It runs on the sample of the config's `ablation.sample` (the directions sample in the paper), so its baseline is
-generated again for that sample and each seed:
+It runs on the steering sample, so its baseline is generated again for each seed:
 
     <run>/ablated/seed_<seed>/block_<L>.npz             from ablated_path(run, seed, block)
     <run>/ablated/seed_<seed>/baseline.npz              from ablated_path(run, seed, None)
