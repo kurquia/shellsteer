@@ -7,8 +7,8 @@
 # should shrink about n-fold, which is not measured yet.
 #
 # Without the gradient pass: vectors/main_block1.npz holds the Z vectors of main_z_block1.yaml at block 1, the vectors
-# this run adds (STRUCTURE.md). This command then replaces this script, from the repository root, and has no
-# gradients stage; the generation takes about 70 min on one B200:
+# this run adds (README, "Data and models"). This command then replaces this script, from the repository root, and
+# has no gradients stage; the generation takes about 70 min on one B200:
 #   steer all configs/paper/all_muons.yaml --set steering_vectors.from_file=vectors/main_block1.npz
 set -euo pipefail
 CONFIG=configs/paper/all_muons.yaml

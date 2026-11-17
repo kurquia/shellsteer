@@ -8,8 +8,8 @@
 # should shrink about n-fold, which is not measured yet.
 #
 # Without the gradient pass: vectors/main_block1.npz holds the vectors of the steering-vectors stage below (block 1
-# only, STRUCTURE.md). Each command below then replaces this script, from the repository root; each generation of
-# 1,040,000 events takes about 14 min on one B200.
+# only, README, "Data and models"). Each command below then replaces this script, from the repository root; each
+# generation of 1,040,000 events takes about 14 min on one B200.
 #   Fig. 3, 5 generations, about 70 min:
 #     steer all configs/paper/main_z_block1.yaml --set steering_vectors.from_file=vectors/main_block1.npz \
 #       --set name=main_z_block1_from_vectors

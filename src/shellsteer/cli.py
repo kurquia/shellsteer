@@ -2,7 +2,7 @@
 
 A config runs one of three chains of stages (STAGES, `Config.chain`): the steering run (Sec. 5); the kinematics run
 (Figs. 4 and 14), whose steering sample holds events of every final state; or, with an `ablation` section, the mean
-ablation (Sec. 5.3). A run writes to <runs>/<config name>/ (STRUCTURE.md, "Outputs"). Each stage reads only the
+ablation (Sec. 5.3). A run writes to <runs>/<config name>/ (README, "Run the full chain"). Each stage reads only the
 files of the stages it needs and stops, naming the missing file and the stage that writes it, if one is absent. A
 stage refuses to replace its own output unless --overwrite is given, and refuses to run on outputs that were made
 with other settings. The resolved config, overrides applied, goes to config.yaml in the run folder; the log to stdout.
@@ -914,8 +914,8 @@ def run_stage(stage: Stage, config: Config, run: Path, devices: Devices, overwri
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="steer", description="Run the stages of a steering run or of a mean ablation (STRUCTURE.md); outputs go "
-                                  "to RUNS/<name>/.")
+        prog="steer", description="Run the stages of a steering run or of a mean ablation (README, \"Run the full "
+                                  "chain\"); outputs go to RUNS/<name>/.")
     commands = parser.add_subparsers(dest="stage", required=True, metavar="STAGE")
     chains = {chain: ", ".join(s.name for s in STAGES if chain in s.chains) for chain in CHAINS}
     every = (f"every stage of the config's run in order: {chains['steering']} for a steering run; "

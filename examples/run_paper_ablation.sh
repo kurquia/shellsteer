@@ -7,7 +7,7 @@
 # should shrink about n-fold, which is not measured yet.
 #
 # Without the gradient pass: add --set steering_vectors.from_file=vectors/main_block1.npz to every command
-# (STRUCTURE.md).
+# (README, "Run the full chain").
 # `steer gradients` then makes only the baseline of the directions sample and its kept pairs, which c_k needs: about
 # 14 min instead of about 1 h on one B200. `steer steering-vectors` copies the file after a check against the config.
 set -euo pipefail

@@ -741,7 +741,7 @@ def all_particles_figure(rows: dict[int, dict[str, Panel]], *, baseline_label: s
 
     rows: ShellFlow type code -> variable -> Panel from `kinematics.type_panels`, in the order of the rows; the paper
     shows electrons, photons, jets, large-R jets, and hadronic taus. The paper's figure also has the mass of the
-    massive types, which needs masses that four-momenta in float32 do not give (STRUCTURE.md). ratio_range: (low,
+    massive types, which needs masses that four-momenta in float32 do not give. ratio_range: (low,
     high) of every ratio panel; bins outside run off the panel; (0.9, 1.1) in the paper. ratio_min_baseline and
     baseline_label: as in `kinematics_figure`.
     """

@@ -120,7 +120,23 @@ The stages of the steering chain write these files to `runs/<name>/`:
 | `readout` | Computes $\mathcal{R}_{60}$, the shift of the Z, the selectivity curve, and the lineshape fits | `readout.json` | CPU |
 | `plots` | Draws the steered spectrum (Fig. 3), the selectivity curve, and the pole and width against $\alpha$ (Fig. 5) | `plots/*.pdf` | CPU |
 
-[STRUCTURE.md](STRUCTURE.md) lists the files of the other chains and the layout of the package.
+The kinematics chain (`all_muons.yaml`) runs `gradients`, `steering-vectors`, and `generate` as above, then two stages of its own.
+Its `generate` stage keeps every particle of each event and writes no `generated/kept.npz`.
+
+| Stage | What it does | Writes | Device |
+|---|---|---|---|
+| `kinematics-readout` | Counts $p_T$, $\eta$, $\phi$, and $E$ of every particle type for real data, the baseline, and each $\alpha$, and finds the largest change per bin | `kinematics.npz`, `kinematics_readout.json` | CPU |
+| `kinematics-plots` | Draws the kinematics of the edited muons (Fig. 4) and of every other particle type (Fig. 14) | `plots/kinematics.pdf`, `plots/all_particles.pdf` | CPU |
+
+The mean-ablation chain (`ablation_z.yaml`) runs `gradients` and `steering-vectors` as above, then four stages of its own.
+With `steering_vectors.from_file`, its `gradients` stage writes only `directions_kept.npz`, because the mean of Eq. 25 needs the kept pairs.
+
+| Stage | What it does | Writes | Device |
+|---|---|---|---|
+| `activation-means` | Sums the residual stream of the kept pairs per class, for the mean of Eq. 25 | `activation_means.npz` | GPU |
+| `ablate` | Generates `ablation.sample` without edits and with the mean ablation (Eq. 24), for each seed | `ablated/seed_<seed>/baseline.npz`, `ablated/seed_<seed>/block_<L>.npz` | GPU |
+| `ablation-readout` | Computes the spread and height of the target peak and the deviation below 60 GeV | `ablation_readout.json` | CPU |
+| `ablation-plots` | Draws the baseline, the mean ablation, and real data (Fig. 7) | `plots/ablation.pdf` | CPU |
 
 A stage refuses to run if the output of a stage it needs is missing or was made with other settings.
 It also refuses to replace its own output unless you pass `--overwrite`.
