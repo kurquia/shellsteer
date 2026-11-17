@@ -42,8 +42,8 @@ from shellsteer.activation_means import (activation_means, load_activation_means
 from shellsteer.config import Config, load_config
 from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
                                 parse_devices)
-from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, final_state_rows, load_events,
-                               load_final_states, select, tokens_of_type)
+from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, NotUploadedError, class_names, class_of, final_state_rows,
+                               load_events, load_final_states, select, tokens_of_type)
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
 from shellsteer.kinematics import (MASS, MASSIVE_TYPES, VARIABLES, largest_changes, load_panels, mass_panels, real_mass,
                                    save_panels, type_masks, type_panels)
@@ -977,7 +977,7 @@ def main(argv: list[str] | None = None) -> int:
         devices = parse_devices(args.devices) if any(stage.gpu for stage in stages) else (torch.device("cpu"),)
         for stage in stages:
             run_stage(stage, config, run, devices, args.overwrite, warn_later=args.stage != "all")
-    except (StageError, ValidationError, NanError, DeviceError) as error:
+    except (StageError, ValidationError, NanError, DeviceError, NotUploadedError) as error:
         print(f"steer {args.stage}: {error}", file=sys.stderr)
         return 1
     return 0

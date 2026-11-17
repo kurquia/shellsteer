@@ -60,7 +60,7 @@ def real_mass(rows: np.ndarray, particle_type: np.ndarray, particle_mask: np.nda
     padding: sqrt(max(E^2 - (p_T cosh eta)^2, 0)) in float64 from p_T, eta, and E as the dataset stores them, before
     the conversion to (px, py, pz, E). This is the real data of the mass column of paper Fig. 14.
 
-    rows: (E, 2, 266) float32 ShellFlow rows of the events, the `rows` key of the event files. particle_type,
+    rows: (E, 2, L) float32 ShellFlow rows of the events, the `rows` key of the event files. particle_type,
     particle_mask: (E, SLOTS) of the same events. ShellFlow's collator places each feature in its particle slot; eta
     is clamped to +-5 and a particle without E takes E = p_T, as the collator does for the four-momenta. In float32
     four-momenta, E^2 - |p|^2 of a hadronic tau (m below 1 GeV, E of tens of GeV) is lost to cancellation.

@@ -19,13 +19,15 @@ holds `rows`, STORED_KEYS, `event`, `p4` (the real four-momenta, the grey lines 
 except in events with exactly one muon pair. It has no priority: the events load in file order. `final_state_rows`
 streams the rows of the same events, for the real-data mass of Fig. 14.
 
-`rows` holds the bytes ShellFlow's ParticleDataset reads for each event: float32 (E, 2, 266), the raw feature values
-and the packed particle and feature indices. Each network normalises the extra features with the constants of its own
+`rows` holds the bytes ShellFlow's ParticleDataset reads for each event: float32 (E, 2, L), the raw feature values
+and the packed particle and feature indices. L is the row length of the source dataset: 266 for the combined dataset,
+161 for 2to4lep. Each network normalises the extra features with the constants of its own
 dataloader config (networks.yaml), so the files hold no `particle_extra`: `particle_extra` builds it per network with
 ShellFlow's normaliser and collator.
 
 Every file comes from Hugging Face at a pinned revision. The events are stored in the order the paper ran them, so the
-batches and their noise seeds match the paper's runs.
+batches and their noise seeds match the paper's runs. A datasets.yaml entry whose files are not uploaded yet has the
+revision NOT_UPLOADED; `download` stops on it.
 """
 
 from __future__ import annotations
@@ -54,6 +56,11 @@ PAIR_TYPES = {"electron": 11, "muon": 13, "tau": 15}   # ShellFlow's PARTICLE_TY
 # Every particle type of ShellFlow, code -> name: the rows of paper Fig. 14, edited type first in Fig. 4.
 PARTICLE_TYPES = {13: "muon", 11: "electron", 22: "photon", 1: "jet", 10: "large-R jet", 15: "hadronic tau"}
 NEGATIVE, POSITIVE = 0, 2                               # ShellFlow stores charge + 1
+NOT_UPLOADED = "TODO-after-upload"                      # datasets.yaml revision of files not on Hugging Face yet
+
+
+class NotUploadedError(ValueError):
+    """A datasets.yaml entry names files that are not on Hugging Face yet (revision NOT_UPLOADED)."""
 
 
 @dataclass(frozen=True)
@@ -82,10 +89,15 @@ class FinalStates:
 
 
 def download(entry: DatasetEntry, sample: Literal["directions", "steering"]) -> str:
-    """Local path of the file of `sample`, from Hugging Face or its cache. Stops if the entry has no such file."""
+    """Local path of the file of `sample`, from Hugging Face or its cache. Stops if the entry has no such file, or if
+    its files are not uploaded yet (revision NOT_UPLOADED)."""
     name = getattr(entry.files, sample)
     if name is None:
         raise ValueError(f"the dataset of {entry.files.steering!r} has no {sample} sample")
+    if entry.revision == NOT_UPLOADED:
+        raise NotUploadedError(f"{name} is not on Hugging Face yet: its datasets.yaml entry has revision "
+                               f"{NOT_UPLOADED!r}. Upload the file to {entry.hf_repo} and set revision to the commit "
+                               f"of the upload")
     return hf_hub_download(entry.hf_repo, name, revision=entry.revision, repo_type="dataset")
 
 
@@ -109,14 +121,14 @@ def as_conditioning(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 
 
 def particle_extra(rows: np.ndarray, dataloader_config: str, batch_size: int = 16384) -> np.ndarray:
-    """(E, 10, 13) float32 extra features of the events in `rows` (float32 (E, 2, 266) ShellFlow rows), normalised
+    """(E, 10, 13) float32 extra features of the events in `rows` (float32 (E, 2, L) ShellFlow rows), normalised
     with the constants of `dataloader_config`, a file name in shellflow/config/.
 
     This is ShellFlow's training path: the row split of ParticleDataset.__getitem__, its normaliser, and its collator,
     `batch_size` events at a time.
     """
-    if rows.dtype != np.float32 or rows.ndim != 3 or rows.shape[1:] != (2, 266):
-        raise ValueError(f"rows: {rows.dtype} {rows.shape}, expected float32 (E, 2, 266)")
+    if rows.dtype != np.float32 or rows.ndim != 3 or rows.shape[1] != 2 or rows.shape[2] < 3:
+        raise ValueError(f"rows: {rows.dtype} {rows.shape}, expected float32 (E, 2, L) ShellFlow rows")
     path = resources.files("shellflow") / "config" / dataloader_config
     if not path.is_file():
         raise ValueError(f"dataloader config {dataloader_config!r} is not in shellflow/config/")
@@ -140,7 +152,7 @@ def particle_extra(rows: np.ndarray, dataloader_config: str, batch_size: int = 1
 def row_blocks(data, path: str, keep: np.ndarray, batch_size: int = 16384
                ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """(index, rows) of the events `keep` (sorted row numbers) of the open file `data`, block by block: index holds
-    row numbers of `keep`, rows their float32 (len(index), 2, 266) ShellFlow rows. The blocks cover `keep` in order.
+    row numbers of `keep`, rows their float32 (len(index), 2, L) ShellFlow rows. The blocks cover `keep` in order.
 
     A compressed file cannot be memory-mapped, so this streams `rows` in blocks of `batch_size` events and yields
     only the rows of the needed events. The rows of the whole file (2.2 GB) are never in memory at once.
@@ -149,14 +161,14 @@ def row_blocks(data, path: str, keep: np.ndarray, batch_size: int = 16384
         version = np.lib.format.read_magic(file)
         read_header = {(1, 0): np.lib.format.read_array_header_1_0, (2, 0): np.lib.format.read_array_header_2_0}
         shape, fortran, dtype = read_header[version](file)
-        if dtype != np.float32 or fortran or len(shape) != 3 or shape[1:] != (2, 266):
-            raise ValueError(f"{path}: rows is {dtype} {shape}, expected float32 (E, 2, 266) in C order")
+        if dtype != np.float32 or fortran or len(shape) != 3 or shape[1] != 2 or shape[2] < 3:
+            raise ValueError(f"{path}: rows is {dtype} {shape}, expected float32 (E, 2, L) in C order")
         if len(keep) and keep[-1] >= shape[0]:
             raise ValueError(f"{path}: rows holds {shape[0]} events, the file has more")
-        done, row_bytes = 0, 2 * 266 * 4
+        done, row_bytes = 0, 2 * shape[2] * 4
         for start in range(0, int(keep[-1]) + 1 if len(keep) else 0, batch_size):
             count = min(batch_size, shape[0] - start)
-            block = np.frombuffer(file.read(count * row_bytes), np.float32).reshape(count, 2, 266)
+            block = np.frombuffer(file.read(count * row_bytes), np.float32).reshape(count, 2, shape[2])
             wanted = keep[done:np.searchsorted(keep, start + count)]
             yield wanted, block[wanted - start]
             done += len(wanted)
