@@ -31,6 +31,8 @@ steering_vectors:
   method: fkt                       # fkt | fisher | meandiff
   in_time: per_step                 # per_step | constant
   balance: equal                    # equal | by_count
+  from_file: null                   # null: from the gradient pass | a steering_vectors.npz, such as
+                                    # vectors/main_block1.npz; then the run has no gradient pass
 
 # The edit h_L -> h_L + alpha xi(t), on the steering sample.
 steering:
