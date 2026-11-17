@@ -43,23 +43,6 @@ src/<package>/
   paper.mplstyle       the paper's figure style, applied only inside plots.py
   data/
     luminosity_nnpdf40_13tev.csv  quark luminosities with the muon acceptance, written by luminosity.py
-tests/
-  test_config.py       the paper config loads; each bad value stops with its message
-  test_networks.py     the network loads from Hugging Face, frozen
-  test_sampler.py      the sampler matches the paper's sampler bit for bit on CPU; NaNs counted, set to 0, or stop
-  test_hooks.py        alpha = 0 reproduces the baseline bit for bit; probe and steer match the paper's code
-  test_events.py       pair slots, edited tokens, loading, classes, and selection of the pairs
-  test_gradients.py    the per-class sums equal the sums of the per-pair gradients
-  test_steering_vectors.py  FKT on a toy problem with a known answer; save and load round trip
-  test_steered_generation.py  alpha = 0 is the baseline; the batches equal a loop by hand; save and load
-  test_lineshape.py    the paper's baseline histogram refits to the paper's pole and width
-  test_luminosity.py   the grid reader and the integral on a grid with a known answer; the csv round trip
-  test_metrics.py      R_60, the target shift, and the ablation numbers on spectra with known answers
-  test_ablation.py     the Ablate and Record hooks, the activation means, and the ablated generation
-  test_cli.py          both runs through `steer` on CPU at a small size; overrides, stage dependencies, refusals;
-                       the real-data line of both spectra
-  test_plots.py        each figure draws its panels and lines; bad inputs stop
-  test_gpu.py          the paper's baseline and sums on a CUDA GPU; skipped without one
 ```
 
 ## Outputs
