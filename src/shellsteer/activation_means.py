@@ -19,30 +19,35 @@ import numpy as np
 import torch
 
 from shellsteer.config import Classes
-from shellsteer.events import Events, batches, class_names, class_of, pair_mass
+from shellsteer.devices import Workers
+from shellsteer.events import Events, batch_at, batch_count, class_names, class_of, pair_mass
 from shellsteer.hooks import Record, attach, on_step
 from shellsteer.networks import Network
 from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
 
 
-def activation_means(network: Network, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
-                     steps: int, batch_size: int, seed: int, device: str | torch.device,
+def activation_means(workers: Workers, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
+                     steps: int, batch_size: int, seed: int,
                      on_nan: OnNan = "set_to_zero") -> tuple[dict[str, np.ndarray], NanCounts]:
     """Run the forward pass over every event of `events`; return the per-class sums of the module docstring and the
     NaN counts of the generation (`sampler.generate` with `on_nan`).
 
     kept: (E,) class of each pair from `events.select`, "" for pairs left out.
     "sum" has shape (classes, blocks, steps, 2 width). A pair with a non-finite token enters no class and is counted
-    in "non-finite pairs".
+    in "non-finite pairs". `workers.map` runs the batches on its devices. Each batch returns its terms of the sum, and
+    they are added on the first device in batch order, so the sum is bit-identical to that of one device of the same
+    type.
     """
     names = class_names(classes)
-    width = 2 * network.model.d_model
-    total = torch.zeros(len(names), len(blocks), steps, width, dtype=torch.float64, device=device)
+    width = 2 * workers.width
+    total = torch.zeros(len(names), len(blocks), steps, width, dtype=torch.float64, device=workers.first)
     count = np.zeros(len(names), dtype=np.int64)
     non_finite = 0
     nans = []
 
-    for index, batch, minus, plus in batches(events, batch_size, device):
+    def one_batch(index: int, network: Network, device: torch.device):
+        """The terms of the sum of batch `index`, per class and block; the counts; the NaN counts."""
+        batch, minus, plus = batch_at(events, index, batch_size, device)
         rows = slice(index * batch_size, index * batch_size + len(minus))
         records = [Record(network, steps, minus, plus) for _ in blocks]
         with ExitStack() as stack:
@@ -51,16 +56,20 @@ def activation_means(network: Network, events: Events, kept: np.ndarray, classes
             generated = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps, on_nan=on_nan,
                                  label=f"batch {index} of the activation means, seed {seed}", on_step=on_step(*records))
         mass = pair_mass(generated.four_momenta, minus, plus)
-        nans.append(NanCounts.of_batch(generated, mass))
         finite = torch.stack([record.tokens.isfinite().all(-1).all(0) for record in records]).all(0)
-        non_finite += int((~finite).sum())
         pair_class = class_of(mass.double().cpu().numpy(), classes)
         pair_class[(kept[rows] == "") | ~finite.cpu().numpy()] = ""
-        for c, name in enumerate(names):
-            members = torch.from_numpy(np.flatnonzero(pair_class == name)).to(device)
-            count[c] += len(members)
-            for b, record in enumerate(records):
-                total[c, b] += record.tokens[:, members].double().sum(1)
+        members = [torch.from_numpy(np.flatnonzero(pair_class == name)).to(device) for name in names]
+        terms = [[record.tokens[:, m].double().sum(1) for record in records] for m in members]
+        return terms, [len(m) for m in members], int((~finite).sum()), NanCounts.of_batch(generated, mass)
+
+    for terms, members, batch_non_finite, batch_nans in workers.map(batch_count(events, batch_size), one_batch):
+        for c, per_block in enumerate(terms):
+            count[c] += members[c]
+            for b, value in enumerate(per_block):
+                total[c, b] += value.to(workers.first)
+        non_finite += batch_non_finite
+        nans.append(batch_nans)
 
     means = {"classes": np.array(names), "blocks": np.array(blocks), "count": count,
              "non-finite pairs": np.array(non_finite), "sum": total.cpu().numpy()}

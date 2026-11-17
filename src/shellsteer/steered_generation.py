@@ -25,14 +25,15 @@ generated again for that sample and each seed:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 import torch
 
-from shellsteer.events import Events, batches, edited_tokens, pair_mass
+from shellsteer.devices import Workers
+from shellsteer.events import Events, batch_at, batch_count, edited_tokens, pair_mass
 from shellsteer.hooks import Ablate, Steer, attach, on_step
 from shellsteer.networks import Network
 from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
@@ -91,39 +92,43 @@ def check_edit(edit: Edit | Ablation, steps: int, width: int) -> None:
         raise ValueError(f"edit steps: need 0 <= first <= last < {steps}, got {edit.steps}")
 
 
-def generate_pairs(network: Network, events: Events, edit: Edit | Ablation | None, *, steps: int, batch_size: int,
-                   seed: int, device: str | torch.device, on_nan: OnNan = "set_to_zero") -> GeneratedPairs:
+def generate_pairs(workers: Workers, events: Events, edit: Edit | Ablation | None, *, steps: int, batch_size: int,
+                   seed: int, on_nan: OnNan = "set_to_zero") -> GeneratedPairs:
     """Generate every event of `events` with `edit` (steering or ablation), or without edits for edit=None.
 
     Batch i holds events i x batch_size to (i + 1) x batch_size - 1 in file order and starts from the noise of
-    batch_seed(seed, i). The mass is `events.pair_mass` of the float32 four-momenta, then converted to float64.
+    batch_seed(seed, i); `workers.map` runs it on one of its devices and returns the batches in order. The mass is
+    `events.pair_mass` of the float32 four-momenta, then converted to float64.
     on_nan: what `sampler.generate` does with a NaN; the counts are in the `nans` of the result.
     """
     if edit is not None:
-        check_edit(edit, steps, network.model.d_model)
-        edit = replace(edit, xi=edit.xi.to(device))
-        if isinstance(edit, Ablation):
-            edit = replace(edit, mean=edit.mean.to(device))
-    masses, four_momenta, nans = [], [], []
-    for index, batch, minus, plus in batches(events, batch_size, device):
+        check_edit(edit, steps, workers.width)
+
+    def one_batch(index: int, network: Network, device: torch.device) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        batch, minus, plus = batch_at(events, index, batch_size, device)
         state = prior(network, batch, batch_seed(seed, index))
         settings = dict(on_nan=on_nan, label=f"batch {index} of seed {seed}")
         if edit is None:
             generated = generate(network, batch, state, steps, **settings)
         else:
             if isinstance(edit, Ablation):
-                hook = Ablate(edit.xi, edit.mean, minus, plus)
+                hook = Ablate(edit.xi.to(device), edit.mean.to(device), minus, plus)
             else:
-                hook = Steer(edit.xi, edit.alpha, *edited_tokens(batch, minus, plus, edit.pair, edit.tokens),
+                hook = Steer(edit.xi.to(device), edit.alpha, *edited_tokens(batch, minus, plus, edit.pair, edit.tokens),
                              steps=edit.steps, norm_restore=edit.norm_restore)
             with attach(network, edit.block, hook):
                 generated = generate(network, batch, state, steps, on_step=on_step(hook), **settings)
         p4 = generated.four_momenta
         rows = torch.arange(len(minus), device=p4.device)
         mass = pair_mass(p4, minus, plus)
-        masses.append(mass.double().cpu().numpy())
-        four_momenta.append(torch.stack([p4[rows, minus], p4[rows, plus]], dim=1).cpu().numpy())
-        nans.append(NanCounts.of_batch(generated, mass))
+        return (mass.double().cpu().numpy(), torch.stack([p4[rows, minus], p4[rows, plus]], dim=1).cpu().numpy(),
+                NanCounts.of_batch(generated, mass))
+
+    masses, four_momenta, nans = [], [], []
+    for mass, pair, counts in workers.map(batch_count(events, batch_size), one_batch):
+        masses.append(mass)
+        four_momenta.append(pair)
+        nans.append(counts)
     return GeneratedPairs(mass=np.concatenate(masses), four_momenta=np.concatenate(four_momenta), event=events.event,
                           nans=NanCounts(on_nan, events.event, np.concatenate(nans)))
 

@@ -130,10 +130,20 @@ def log_pair_mass(p4: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> 
 def batches(events: Events, batch_size: int, device: str | torch.device
             ) -> Iterator[tuple[int, dict[str, torch.Tensor], torch.Tensor, torch.Tensor]]:
     """(batch index, batch, minus, plus) on `device`, in file order. The batch index enters the noise seed."""
-    for index, start in enumerate(range(0, len(events), batch_size)):
-        part = slice(start, start + batch_size)
-        batch = {key: value[part].to(device) for key, value in events.batch.items()}
-        yield index, batch, events.minus[part].to(device), events.plus[part].to(device)
+    for index in range(batch_count(events, batch_size)):
+        yield index, *batch_at(events, index, batch_size, device)
+
+
+def batch_count(events: Events, batch_size: int) -> int:
+    return -(-len(events) // batch_size)
+
+
+def batch_at(events: Events, index: int, batch_size: int, device: str | torch.device
+             ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """Batch `index` of `batches` (events index x batch_size onwards, in file order), minus, and plus on `device`."""
+    part = slice(index * batch_size, (index + 1) * batch_size)
+    batch = {key: value[part].to(device) for key, value in events.batch.items()}
+    return batch, events.minus[part].to(device), events.plus[part].to(device)
 
 
 def class_of(mass: np.ndarray, classes: Classes) -> np.ndarray:

@@ -31,12 +31,13 @@ from pydantic import BaseModel, ValidationError
 from shellsteer.activation_means import (activation_means, load_activation_means, mean_projection,
                                          save_activation_means)
 from shellsteer.config import Config, load_config
+from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
+                                parse_devices)
 from shellsteer.events import class_names, class_of, load_events, select
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
 from shellsteer.lineshape import LineshapeFit, fit_masses
 from shellsteer.metrics import (below_mass_deviation, log_bin_edges, peak_height_change, pole_response_fit, r60,
                                 selectivity_curve, target_shift, window_log_spread)
-from shellsteer.networks import load_network
 from shellsteer.plots import (ablation_figure, pole_and_width_figure, save, selectivity_figure,
                               steered_spectrum_figure)
 from shellsteer.sampler import NanError
@@ -154,35 +155,34 @@ def require_generated(config: Config, run: Path) -> None:
             require(generated_path(run, seed, alpha), "generate")
 
 
-def check_device(device: str) -> None:
-    if device.startswith("cuda") and not torch.cuda.is_available():
-        raise StageError(f"--device {device}: CUDA is not available here; run on a machine with a CUDA GPU, or pass "
-                         f"--device cpu (slow at the paper's size)")
+def start_workers(stage: str, config: Config, devices: Devices) -> Workers:
+    """Log the devices of the stage and load the network once on each."""
+    for line in describe_devices(devices):
+        log(stage, line)
+    return load_workers(config.networks[config.network], devices)
 
 
 def class_counts(kept: np.ndarray, names: list[str]) -> str:
     return ", ".join(f"{name} {int(np.sum(kept == name)):,}" for name in names)
 
 
-def run_gradients(config: Config, run: Path, device: str) -> None:
+def run_gradients(config: Config, run: Path, devices: Devices) -> None:
     """Gradient pass on the directions sample (paper Sec. 4.1): the per-class sums of gradients.py."""
     stage = "gradients"
-    check_device(device)
     entry = config.datasets[config.events.dataset]
-    network = load_network(config.networks[config.network], device)
+    workers = start_workers(stage, config, devices)
     directions = load_events(entry, "directions", config.events.directions)
-    log(stage, f"{len(directions):,} events of the directions sample, device {device}")
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
-                 on_nan=config.sampler.on_nan)
+    log(stage, f"{len(directions):,} events of the directions sample")
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, on_nan=config.sampler.on_nan)
     start = time.perf_counter()
-    baseline = generate_pairs(network, directions, None, seed=config.gradients.seed, **sizes)
+    baseline = generate_pairs(workers, directions, None, seed=config.gradients.seed, **sizes)
     kept = select(baseline.mass, directions.priority, config.classes, config.events.keep)
     names = class_names(config.classes)
     log(stage, f"baseline of seed {config.gradients.seed} in {time.perf_counter() - start:.1f} s; kept "
                f"{config.events.keep:,} pairs: {class_counts(kept, names)}")
     log(stage, f"baseline of seed {config.gradients.seed}: {baseline.nans.text()}")
     start = time.perf_counter()
-    moments, nans = gradient_moments(network, directions, kept, config.classes, blocks=list(config.gradients.blocks),
+    moments, nans = gradient_moments(workers, directions, kept, config.classes, blocks=list(config.gradients.blocks),
                                      seed=config.gradients.seed, **sizes)
     counts = ", ".join(f"{name} {int(n):,}" for name, n in zip(moments["classes"], moments["count"]))
     log(stage, f"gradient pass in {time.perf_counter() - start:.1f} s; pairs per class: {counts}; "
@@ -190,18 +190,19 @@ def run_gradients(config: Config, run: Path, device: str) -> None:
     log(stage, f"gradient pass: {nans.text()}")
     metadata = {"steps": config.sampler.steps, "batch_size": config.sampler.batch_size,
                 "seed": config.gradients.seed, "blocks": list(config.gradients.blocks), "keep": config.events.keep,
-                "events": config.events.directions, "device": device,
+                "events": config.events.directions, "device": devices_metadata(devices),
                 "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump(),
                 "NaN counts": nans.metadata(), "NaN counts of the baseline": baseline.nans.metadata()}
     save_moments(run / MOMENTS_FILE, moments, metadata)
     log(stage, f"wrote {run / MOMENTS_FILE}")
     save_kept(run / DIRECTIONS_KEPT_FILE, kept, directions.event,
-              {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions", "device": device,
+              {"seed": config.gradients.seed, "keep": config.events.keep, "sample": "directions",
+               "device": devices_metadata(devices),
                "NaN counts": baseline.nans.metadata()})
     log(stage, f"wrote {run / DIRECTIONS_KEPT_FILE}")
 
 
-def run_steering_vectors(config: Config, run: Path, device: str) -> None:
+def run_steering_vectors(config: Config, run: Path, devices: Devices) -> None:
     """Steering vectors of every class and block from the class sums (paper Sec. 4.2)."""
     stage = "steering-vectors"
     moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
@@ -214,29 +215,27 @@ def run_steering_vectors(config: Config, run: Path, device: str) -> None:
     log(stage, f"wrote {run / VECTORS_FILE}")
 
 
-def run_generate(config: Config, run: Path, device: str) -> None:
+def run_generate(config: Config, run: Path, devices: Devices) -> None:
     """Baseline and steered generation of the steering sample (paper Sec. 5, Eq. 8), every seed and alpha."""
     stage = "generate"
-    check_device(device)
     alphas = (0.0, *config.steering.alphas)
     # Every output path first: generated_path stops on an alpha whose file name would clash, before any generation.
     paths = {(seed, alpha): generated_path(run, seed, alpha) for seed in config.steering.seeds for alpha in alphas}
     xi = load_steering_vector(require(run / VECTORS_FILE, "steering-vectors"), config.target, config.steering.block)
     entry = config.datasets[config.events.dataset]
-    network = load_network(config.networks[config.network], device)
+    workers = start_workers(stage, config, devices)
     events = load_events(entry, "steering", config.events.steering)
-    log(stage, f"{len(events):,} events of the steering sample, device {device}; {config.target} vector at block "
+    log(stage, f"{len(events):,} events of the steering sample; {config.target} vector at block "
                f"{config.steering.block}; seeds {list(config.steering.seeds)}, alphas {list(alphas)}")
     edit_steps = None if config.steering.steps == "all" else tuple(config.steering.steps)
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
-                 on_nan=config.sampler.on_nan)
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, on_nan=config.sampler.on_nan)
     for seed in config.steering.seeds:
         for alpha in alphas:
             edit = None if alpha == 0 else Edit(xi=xi, alpha=alpha, block=config.steering.block,
                                                 tokens=config.steering.tokens, pair=entry.pair, steps=edit_steps,
                                                 norm_restore=config.steering.norm_restore)
             start = time.perf_counter()
-            generated = generate_pairs(network, events, edit, seed=seed, **sizes)
+            generated = generate_pairs(workers, events, edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
             log(stage, f"seed {seed}, alpha {alpha:+g}: {generated.nans.text()}")
             if seed == config.steering.seeds[0] and alpha == 0:
@@ -250,7 +249,7 @@ def run_generate(config: Config, run: Path, device: str) -> None:
                 "method": config.steering_vectors.method, "seed": seed, "steps": config.sampler.steps,
                 "edited steps": None if edit_steps is None else list(edit_steps), "tokens": config.steering.tokens,
                 "norm_restore": config.steering.norm_restore, "steering vector file": VECTORS_FILE,
-                "batch_size": config.sampler.batch_size, "device": device,
+                "batch_size": config.sampler.batch_size, "device": devices_metadata(devices),
                 "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump()})
             log(stage, f"seed {seed}, alpha {alpha:+g}: {len(generated.mass):,} pairs in {seconds:.1f} s; "
                        f"wrote {path}")
@@ -273,7 +272,7 @@ def counted_pairs(run: Path, seed: int) -> tuple[np.ndarray, np.ndarray]:
     return kept, kept != ""
 
 
-def run_readout(config: Config, run: Path, device: str) -> None:
+def run_readout(config: Config, run: Path, devices: Devices) -> None:
     """R_60, the target shift, the selectivity curve, the response fits, and the Z lineshape fits (Sec. 5, App. E)."""
     stage = "readout"
     moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
@@ -354,7 +353,7 @@ def real_masses(config: Config, sample: Literal["directions", "steering"], event
     return events.m_real
 
 
-def run_plots(config: Config, run: Path, device: str) -> None:
+def run_plots(config: Config, run: Path, devices: Devices) -> None:
     """The steered spectrum with real data (Fig. 3) and the selectivity curve, from the first seed; pole and width
     (Fig. 5) for Z."""
     stage = "plots"
@@ -397,41 +396,40 @@ def ablation_kept_file(config: Config, run: Path) -> tuple[Path, str]:
     return run / ABLATED_KEPT_FILE, "ablate"
 
 
-def run_activation_means(config: Config, run: Path, device: str) -> None:
+def run_activation_means(config: Config, run: Path, devices: Devices) -> None:
     """Mean of the residual stream on the pair's tokens over the kept pairs of the directions sample, the input of
     c_k (paper Eq. 25): one forward pass without edits with the noise of gradients.seed."""
     stage = "activation-means"
-    check_device(device)
     kept_file = require(run / DIRECTIONS_KEPT_FILE, "gradients")
     kept, event, _ = load_kept(kept_file)
     entry = config.datasets[config.events.dataset]
-    network = load_network(config.networks[config.network], device)
+    workers = start_workers(stage, config, devices)
     events = load_events(entry, "directions", config.events.directions)
     if not np.array_equal(events.event, event):
         raise StageError(f"the directions sample holds other events than {kept_file}; rerun `steer gradients "
                          f"--overwrite`")
-    log(stage, f"{len(events):,} events of the directions sample, device {device}; block {config.ablation.block}, "
+    log(stage, f"{len(events):,} events of the directions sample; block {config.ablation.block}, "
                f"seed {config.gradients.seed}")
     start = time.perf_counter()
-    means, nans = activation_means(network, events, kept, config.classes, blocks=[config.ablation.block],
+    means, nans = activation_means(workers, events, kept, config.classes, blocks=[config.ablation.block],
                                    steps=config.sampler.steps, batch_size=config.sampler.batch_size,
-                                   seed=config.gradients.seed, device=device, on_nan=config.sampler.on_nan)
+                                   seed=config.gradients.seed, on_nan=config.sampler.on_nan)
     counts = ", ".join(f"{name} {int(n):,}" for name, n in zip(means["classes"], means["count"]))
     log(stage, f"forward pass in {time.perf_counter() - start:.1f} s; pairs per class: {counts} (total "
                f"{int(np.sum(means['count'])):,}); non-finite pairs {int(means['non-finite pairs']):,}")
     log(stage, nans.text())
     save_activation_means(run / MEANS_FILE, means, {
         "steps": config.sampler.steps, "batch_size": config.sampler.batch_size, "seed": config.gradients.seed,
-        "blocks": [config.ablation.block], "kept pairs file": DIRECTIONS_KEPT_FILE, "device": device,
+        "blocks": [config.ablation.block], "kept pairs file": DIRECTIONS_KEPT_FILE,
+        "device": devices_metadata(devices),
         "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump(),
         "NaN counts": nans.metadata()})
     log(stage, f"wrote {run / MEANS_FILE}")
 
 
-def run_ablate(config: Config, run: Path, device: str) -> None:
+def run_ablate(config: Config, run: Path, devices: Devices) -> None:
     """Baseline and mean-ablated generation (paper Eq. 24, c_k of Eq. 25) of ablation.sample for every seed."""
     stage = "ablate"
-    check_device(device)
     ablation = config.ablation
     blocks = (None, ablation.block)                                    # None: the baseline
     paths = {(seed, block): ablated_path(run, seed, block) for seed in ablation.seeds for block in blocks}
@@ -447,16 +445,15 @@ def run_ablate(config: Config, run: Path, device: str) -> None:
         if not np.array_equal(events.event, load_kept(kept_file)[1]):
             raise StageError(f"the directions sample holds other events than {kept_file}; rerun `steer gradients "
                              f"--overwrite`")
-    network = load_network(config.networks[config.network], device)
-    log(stage, f"{len(events):,} events of the {ablation.sample} sample, device {device}; {config.target} vector at "
+    workers = start_workers(stage, config, devices)
+    log(stage, f"{len(events):,} events of the {ablation.sample} sample; {config.target} vector at "
                f"block {ablation.block}; seeds {list(ablation.seeds)}")
     edit = Ablation(xi=xi, mean=torch.from_numpy(c), block=ablation.block)
-    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, device=device,
-                 on_nan=config.sampler.on_nan)
+    sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, on_nan=config.sampler.on_nan)
     for seed in ablation.seeds:
         for block in blocks:
             start = time.perf_counter()
-            generated = generate_pairs(network, events, None if block is None else edit, seed=seed, **sizes)
+            generated = generate_pairs(workers, events, None if block is None else edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
             log(stage, f"seed {seed}, {'baseline' if block is None else f'block {block}'}: {generated.nans.text()}")
             if ablation.sample == "steering" and seed == ablation.seeds[0] and block is None:
@@ -470,7 +467,7 @@ def run_ablate(config: Config, run: Path, device: str) -> None:
                 "block": block, "target": config.target, "method": config.steering_vectors.method, "seed": seed,
                 "steps": config.sampler.steps, "sample": ablation.sample, "steering vector file": VECTORS_FILE,
                 "activation means file": MEANS_FILE, "c_k": c.tolist(), "batch_size": config.sampler.batch_size,
-                "device": device, "network": config.networks[config.network].model_dump(),
+                "device": devices_metadata(devices), "network": config.networks[config.network].model_dump(),
                 "dataset": entry.model_dump()}, required=ABLATION_METADATA_KEYS)
             what = "baseline" if block is None else f"ablated at block {block}"
             log(stage, f"seed {seed}, {what}: {len(generated.mass):,} pairs in {seconds:.1f} s; wrote {path}")
@@ -490,7 +487,7 @@ def ablated_masses(config: Config, run: Path, seed: int, kept: np.ndarray, kept_
     return base.mass[counted], ablated.mass[counted]
 
 
-def run_ablation_readout(config: Config, run: Path, device: str) -> None:
+def run_ablation_readout(config: Config, run: Path, devices: Devices) -> None:
     """The numbers of the mean ablation (paper Sec. 5.3, Fig. 7): spread of the target peak, change of its height,
     and the deviation below readout.r60_max_mass, per seed and over seeds (metrics.py)."""
     stage = "ablation-readout"
@@ -549,7 +546,7 @@ def run_ablation_readout(config: Config, run: Path, device: str) -> None:
     log(stage, f"wrote {run / ABLATION_READOUT_FILE}")
 
 
-def run_ablation_plots(config: Config, run: Path, device: str) -> None:
+def run_ablation_plots(config: Config, run: Path, devices: Devices) -> None:
     """Paper Fig. 7: the spectrum of the baseline, the mean ablation, and real data, counts averaged over seeds."""
     stage = "ablation-plots"
     ablation, readout = config.ablation, config.readout
@@ -578,8 +575,8 @@ class Stage:
     needs: tuple[str, ...]             # stages whose outputs this stage reads
     outputs: tuple[str, ...]           # paths in the run folder that the stage writes
     sections: tuple[str, ...]          # config keys, dotted, that the stage reads beyond those of the stages it needs
-    gpu: bool                          # takes --device
-    run: Callable[[Config, Path, str], None]
+    gpu: bool                          # runs the network; takes --devices
+    run: Callable[[Config, Path, Devices], None]
     help: str
 
 
@@ -684,11 +681,12 @@ def prepare(stage: Stage, config: Config, run: Path, overwrite: bool, warn_later
                         f"--overwrite`")
 
 
-def run_stage(stage: Stage, config: Config, run: Path, device: str, overwrite: bool, warn_later: bool = True) -> None:
+def run_stage(stage: Stage, config: Config, run: Path, devices: Devices, overwrite: bool,
+              warn_later: bool = True) -> None:
     prepare(stage, config, run, overwrite, warn_later)
     log(stage.name, f"start, run folder {run}")
     start = time.perf_counter()
-    stage.run(config, run, device)
+    stage.run(config, run, devices)
     log(stage.name, f"done in {time.perf_counter() - start:.1f} s")
 
 
@@ -710,8 +708,11 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--runs", default="runs", help="folder of the run folders (default: runs)")
         command.add_argument("--overwrite", action="store_true", help="replace the output of the stage if it exists")
         if gpu:
-            command.add_argument("--device", default="cuda",
-                                 help="torch device (default: cuda); stops if CUDA is missing, use cpu to run there")
+            command.add_argument("--devices", default=None, metavar="LIST",
+                                 help="devices of the stages that run the network, comma-separated, such as "
+                                      "cuda:0,cuda:1, cpu, or cpu,cpu (two CPU workers); batch i runs on device i mod "
+                                      "n, and the files equal those of one device of the same type (default: every "
+                                      "visible GPU, the CPU if none)")
     return parser
 
 
@@ -725,12 +726,10 @@ def main(argv: list[str] | None = None) -> int:
             stages = [s for s in STAGES if s.chain in ("both", chain_of(config))]
         else:
             stages = [BY_NAME[args.stage]]
-        device = getattr(args, "device", "cpu")
-        if any(stage.gpu for stage in stages):
-            check_device(device)
+        devices = parse_devices(args.devices) if any(stage.gpu for stage in stages) else (torch.device("cpu"),)
         for stage in stages:
-            run_stage(stage, config, run, device, args.overwrite, warn_later=args.stage != "all")
-    except (StageError, ValidationError, NanError) as error:
+            run_stage(stage, config, run, devices, args.overwrite, warn_later=args.stage != "all")
+    except (StageError, ValidationError, NanError, DeviceError) as error:
         print(f"steer {args.stage}: {error}", file=sys.stderr)
         return 1
     return 0
