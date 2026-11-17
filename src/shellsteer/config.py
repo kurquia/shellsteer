@@ -30,6 +30,7 @@ class NetworkEntry(Section):
     revision: str
     file: str
     width: int
+    dataloader_config: str      # a file name in shellflow/config/, the constants of the extra features
 
 
 class DatasetFiles(Section):

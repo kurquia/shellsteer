@@ -187,7 +187,7 @@ def run_gradients(config: Config, run: Path, devices: Devices) -> None:
     stage = "gradients"
     entry = config.datasets[config.events.dataset]
     workers = start_workers(stage, config, devices)
-    directions = load_events(entry, "directions", config.events.directions)
+    directions = load_events(entry, "directions", config.events.directions, config.networks[config.network])
     log(stage, f"{len(directions):,} events of the directions sample")
     sizes = dict(steps=config.sampler.steps, batch_size=config.sampler.batch_size, on_nan=config.sampler.on_nan)
     start = time.perf_counter()
@@ -284,9 +284,9 @@ def run_generate(config: Config, run: Path, devices: Devices) -> None:
     pairs = entry.pair is not None
     workers = start_workers(stage, config, devices)
     if pairs:
-        events = load_events(entry, "steering", config.events.steering)
+        events = load_events(entry, "steering", config.events.steering, config.networks[config.network])
     else:
-        events = load_final_states(entry, config.events.steering)
+        events = load_final_states(entry, config.events.steering, config.networks[config.network])
         negative, positive = (mask.sum(1) for mask in tokens_of_type(events.batch, edited))
         per_event = (negative + positive).bincount()
         log(stage, f"edited {edited}s per event: " + ", ".join(f"{k}: {int(n):,}" for k, n in enumerate(per_event))
@@ -435,7 +435,8 @@ def real_masses(config: Config, sample: Literal["directions", "steering"], event
                 rerun: str) -> np.ndarray:
     """(E,) m_real of the events of `sample`, in the order of `event`, the events of `kept_file`. Stops if the
     sample holds other events; `rerun` names the stage that wrote `kept_file`."""
-    events = load_events(config.dataset(sample), sample, getattr(config.events, sample))
+    events = load_events(config.dataset(sample), sample, getattr(config.events, sample),
+                         config.networks[config.network])
     if not np.array_equal(events.event, event):
         raise StageError(f"the {sample} sample holds other events than {kept_file}; rerun `steer {rerun} "
                          f"--overwrite`")
@@ -496,7 +497,7 @@ def run_activation_means(config: Config, run: Path, devices: Devices) -> None:
     kept, event, _ = load_kept(kept_file)
     entry = config.datasets[config.events.dataset]
     workers = start_workers(stage, config, devices)
-    events = load_events(entry, "directions", config.events.directions)
+    events = load_events(entry, "directions", config.events.directions, config.networks[config.network])
     if not np.array_equal(events.event, event):
         raise StageError(f"the directions sample holds other events than {kept_file}; rerun `steer gradients "
                          f"--overwrite`")
@@ -531,7 +532,8 @@ def run_ablate(config: Config, run: Path, devices: Devices) -> None:
     log(stage, f"c_k from {int(np.sum(means['count'])):,} pairs: {c.min():+.4f} to {c.max():+.4f} over "
                f"{len(c)} steps")
     entry = config.dataset(ablation.sample)
-    events = load_events(entry, ablation.sample, getattr(config.events, ablation.sample))
+    events = load_events(entry, ablation.sample, getattr(config.events, ablation.sample),
+                         config.networks[config.network])
     if ablation.sample == "directions":
         kept_file = require(run / DIRECTIONS_KEPT_FILE, "gradients")
         if not np.array_equal(events.event, load_kept(kept_file)[1]):
@@ -666,7 +668,7 @@ def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
     stage = "kinematics-readout"
     seed, alphas = config.steering.seeds[0], [0.0, *config.steering.alphas]
     paths = {alpha: require(generated_path(run, seed, alpha), "generate") for alpha in alphas}
-    real = load_final_states(config.dataset("steering"), config.events.steering)
+    real = load_final_states(config.dataset("steering"), config.events.steering, config.networks[config.network])
     generated = {alpha: load_generated_events(path)[0] for alpha, path in paths.items()}
     particle_type, particle_mask = real.batch["particle_type"].numpy(), real.batch["particle_mask"].numpy() > 0.5
     for alpha, events in generated.items():
