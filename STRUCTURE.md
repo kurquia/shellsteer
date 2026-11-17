@@ -27,7 +27,7 @@ src/<package>/
   cli.py               steer <stage> CONFIG [--set key=value]...; steer all CONFIG runs the chain of the config
   config.py            reads the YAML into dataclasses; unknown keys are an error; steering or ablation sections
   networks.py          loads a network by name from networks.yaml
-  sampler.py           Euler sampler with seeded noise
+  sampler.py           Euler sampler with seeded noise; counts the NaNs of each event, sets them to 0 or stops
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
   events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
@@ -44,7 +44,7 @@ src/<package>/
 tests/
   test_config.py       the paper config loads; each bad value stops with its message
   test_networks.py     the network loads from Hugging Face, frozen
-  test_sampler.py      the sampler matches the paper's sampler bit for bit on CPU
+  test_sampler.py      the sampler matches the paper's sampler bit for bit on CPU; NaNs counted, set to 0, or stop
   test_hooks.py        alpha = 0 reproduces the baseline bit for bit; probe and steer match the paper's code
   test_events.py       pair slots, edited tokens, loading, classes, and selection of the pairs
   test_gradients.py    the per-class sums equal the sums of the per-pair gradients
@@ -89,6 +89,10 @@ runs/<name>/
 ```
 
 The events load from the Hugging Face cache on every run, so the run folder holds no copy of them.
+
+Every stage that generates events counts the NaNs of the final state, of the four-momenta, and of the pair masses
+(`sampler.on_nan` in the config: set them to 0 as the paper, or stop). The counts appear in a `NaN:` log line and
+under "NaN counts" in the metadata of each file the stage writes.
 
 ## Rules
 
