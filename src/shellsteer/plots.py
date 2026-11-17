@@ -5,6 +5,8 @@ selectivity_figure       R_60 against the target shift, one curve per method (nu
 pole_and_width_figure    Fig. 5: fitted pole M and width Gamma of the target against alpha, with the prediction.
 ablation_figure          Fig. 7: baseline, mean ablation, and real data on log axes, an inset of the target peak, the
                          ratio below.
+kinematics_figure        Fig. 4: p_T, eta, and phi of the edited particle type, each with its ratio panel.
+all_particles_figure     Fig. 14: p_T, eta, phi, and E of every other particle type, one row per type.
 save                     writes a figure as PDF.
 
 Each function returns a Figure drawn at the printed width of the paper, in the style of paper.mplstyle, which applies
@@ -21,8 +23,12 @@ from matplotlib.axes import Axes
 from matplotlib.colors import to_hex
 from matplotlib.figure import Figure
 from matplotlib.patches import ConnectionPatch, Rectangle
-from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator, NullFormatter
+from matplotlib.lines import Line2D
+from matplotlib.ticker import (FixedLocator, FuncFormatter, LogLocator, MaxNLocator, MultipleLocator, NullFormatter,
+                               NullLocator)
 from numpy.typing import ArrayLike
+
+from shellsteer.kinematics import LOG_VARIABLES, VARIABLES, Panel, steered_over_baseline as ratio_of_counts
 
 STYLE_FILE = Path(__file__).with_name("paper.mplstyle")
 
@@ -58,6 +64,26 @@ INSET_TARGET_SIZE = 7                                      # the target's name i
 RATIO_LABEL_SIZE = 6                                       # the two-line y label of the ratio panel of Fig. 7
 LEGEND_ROOM = 0.24                                         # top of the log y axis of Fig. 7 left free for the legend
 BOX_COLOR = "0.3"                                          # the box around the inset's range and its two lines
+
+# Figs. 4 and 14: the kinematics of every particle type.
+KINEMATICS_HEIGHT = 2.6                     # inches, Fig. 4 before cropping
+KINEMATICS_LABELS = {"pt": r"$p_T$ [GeV]", "eta": r"$\eta$", "phi": r"$\phi$", "E": r"$E$ [GeV]"}
+# ShellFlow type code -> name inside the panels of Fig. 4, and title of the row of Fig. 14 (bold through mathtext,
+# because cmr10 has no bold weight).
+PARTICLE_LABELS = {
+    13: ("muons", r"$\mathbf{Muon\ kinematics}$"),
+    11: ("electrons", r"$\mathbf{Electron\ kinematics}$"),
+    22: ("photons", r"$\mathbf{Photon\ kinematics}$"),
+    1: ("jets", r"$\mathbf{Jet\ kinematics}$"),
+    10: ("large-R jets", r"$\mathbf{Large}$-$\mathbf{R\ jet\ kinematics}$"),
+    15: (r"hadronic $\tau$", r"$\mathbf{Hadronic}\ \tau\ \mathbf{kinematics}$")}
+KINEMATICS_RATIO_LINE_WIDTH = 0.7           # the dashed line at 1 of the ratio panels
+KINEMATICS_LEGEND_SPACING = 2.2             # space between legend entries, in font sizes
+SHORT_LOG_RANGE = 30                        # Fig. 4: a log x axis shorter than this factor also labels 2 and 5 x 10^n
+TWO_DECADES = 100                           # Fig. 14: a log x axis shorter than this factor starts below its decade
+ROW_TITLE_SIZE = 9                          # Fig. 14: the title of each row
+# Fig. 14, in inches from the top: legend, then per row title, gap, panels, tick labels; x titles once at the bottom.
+ROW_LEGEND, ROW_TITLE, ROW_GAP, ROW_PANELS, ROW_TICKS, ROW_FOOT = 0.22, 0.14, 0.10, 0.65, 0.24, 0.17
 
 
 # ---------------------------------------------------------------- checks of the inputs
@@ -540,4 +566,212 @@ def ablation_figure(baseline: list[ArrayLike], ablated: list[ArrayLike], real_da
         ratio_panel.set_ylabel(f"{baseline_label} /\n{ABLATION_LABEL}", fontsize=RATIO_LABEL_SIZE)
         ratio_panel.set_xlabel(mass_label(pair_label))
         fit_to_width(figure, COLUMN_WIDTH)
+    return figure
+
+
+# ---------------------------------------------------------------- Figs. 4 and 14: kinematics of every particle type
+
+def ratio_axis_range(ratios: list[np.ndarray]) -> tuple[float, float]:
+    """y range of a ratio panel: 1 +- the largest deviation, rounded up, when every ratio lies within 1 +- 0.25; else
+    0 to the largest ratio rounded up to 0.1, at most 2."""
+    values = np.concatenate([ratio[np.isfinite(ratio)] for ratio in ratios] + [np.array([1.0])])
+    deviation = np.max(np.abs(values - 1.0))
+    if deviation < 0.25:
+        step = next(step for step in (0.001, 0.002, 0.005, 0.01, 0.02, 0.05) if deviation * 1.1 <= 10 * step)
+        half = max(step * np.ceil(deviation * 1.1 / step - 1e-9), 0.005)
+        return 1.0 - half, 1.0 + half
+    return 0.0, float(min(2.0, max(1.05, 0.1 * np.ceil(values.max() * 1.05 / 0.1 - 1e-9))))
+
+
+def set_ratio_ticks(axes: Axes, low: float, high: float) -> None:
+    """Three ticks away from the edges of a ratio panel; the one at 1 has no label, the dashed line marks it."""
+    if low == 0.0:
+        ticks = [tick for tick in (0.5, 1.0, 1.5) if tick < 0.85 * high]
+    else:
+        step = max([s for s in (0.001, 0.002, 0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2) if s <= 0.75 * (high - 1)]
+                   or [0.001])
+        ticks = [1.0 - step, 1.0, 1.0 + step]
+    axes.yaxis.set_major_locator(FixedLocator(ticks))
+    axes.yaxis.set_major_formatter(FuncFormatter(lambda value, position: "" if np.isclose(value, 1.0)
+                                                 else f"${value:g}$"))
+    axes.yaxis.set_minor_locator(NullLocator())
+
+
+def check_panel(panel: Panel, where: str) -> None:
+    """Stops unless the counts of `panel` match its edges and the steered alphas exclude 0."""
+    bins = len(panel.edges) - 1
+    if np.ndim(panel.edges) != 1 or bins < 1 or np.any(np.diff(panel.edges) <= 0):
+        raise ValueError(f"{where}: expected increasing bin edges, got shape {np.shape(panel.edges)}")
+    if not panel.steered or any(float(alpha) == 0.0 for alpha in panel.steered):
+        raise ValueError(f"{where}: expected at least one steered alpha other than 0, got {list(panel.steered)}")
+    for name, values in (("real", panel.real), ("baseline", panel.baseline),
+                         *((f"steered[{alpha:+g}]", values) for alpha, values in panel.steered.items())):
+        if np.shape(values) != (bins,):
+            raise ValueError(f"{where}: {name} has shape {np.shape(values)}, the edges give {bins} bins")
+
+
+def draw_kinematics_panel(axes: Axes, ratio_axes: Axes, variable: str, panel: Panel, colors: dict[float, str], *,
+                          min_baseline: int, x_margin: float, top_factor: float, start_below_decade: bool,
+                          ratio_range: tuple[float, float] | None) -> tuple[float, float]:
+    """One panel of Figs. 4 and 14 and its ratio panel; returns the y range of the ratio panel.
+
+    Counts: real data grey at the back, one solid line per alpha, the baseline black and dashed in front; log axes for
+    p_T and E, linear y from 0 to top_factor x the highest bin for eta and phi. Ratio: steered over baseline in the
+    bins with at least `min_baseline` baseline particles, a gap elsewhere, on `ratio_range`, or on the range of
+    `ratio_axis_range` for None. x_margin: room as a factor on log x axes,
+    beyond the first and last bin with real or baseline particles. A log x axis shorter than two decades starts
+    below its first power of ten with start_below_decade (Fig. 14), so that a power of ten is labelled; without it
+    (Fig. 4), an axis shorter than SHORT_LOG_RANGE labels 2 and 5 times a power of ten under the ratio panel.
+    """
+    edges = np.asarray(panel.edges, dtype=np.float64)
+    real, base = np.asarray(panel.real, dtype=np.float64), np.asarray(panel.baseline, dtype=np.float64)
+    axes.stairs(real, edges, color=REAL_DATA_COLOR, alpha=REAL_DATA_OPACITY, linewidth=HISTOGRAM_LINE_WIDTH, zorder=2)
+    axes.stairs(base, edges, color=BASELINE_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, linestyle="--", zorder=10)
+    ratios = []
+    for alpha, steered in panel.steered.items():
+        axes.stairs(steered, edges, color=colors[alpha], linewidth=HISTOGRAM_LINE_WIDTH, zorder=5)
+        ratio = ratio_of_counts(np.asarray(steered, dtype=np.float64), base, min_baseline)
+        ratio_axes.stairs(ratio, edges, color=colors[alpha], linewidth=HISTOGRAM_LINE_WIDTH, zorder=5, baseline=None)
+        ratios.append(ratio)
+    ratio_axes.axhline(1.0, color=BASELINE_COLOR, linewidth=KINEMATICS_RATIO_LINE_WIDTH, linestyle="--", zorder=10)
+    if variable in LOG_VARIABLES:
+        filled = np.flatnonzero(real + base > 0)
+        if len(filled) == 0:
+            raise ValueError(f"{variable}: no bin has real or baseline particles")
+        low, high = edges[filled[0]] / x_margin, edges[filled[-1] + 1] * x_margin
+        if start_below_decade and high / low < TWO_DECADES:
+            low = min(low, 0.9 * 10 ** np.floor(np.log10(low)))
+        for each in (axes, ratio_axes):
+            each.set_xscale("log")
+            log_axis(each, "x")
+        axes.set_xlim(low, high)
+        if not start_below_decade and high / low < SHORT_LOG_RANGE:
+            ratio_axes.xaxis.set_minor_formatter(FuncFormatter(
+                lambda value, position: f"${value:g}$" if round(value / 10 ** np.floor(np.log10(value)), 6) in (2, 5)
+                else ""))
+        axes.set_yscale("log")
+        log_axis(axes, "y")
+        axes.set_ylim(0.5, max(base.max(), real.max(), 1.0) * 8)
+    else:
+        axes.set_xlim(edges[0], edges[-1])
+        axes.set_ylim(0, max(base.max(), real.max(), 1.0) * top_factor)
+        axes.yaxis.set_major_locator(MaxNLocator(4, prune="lower"))
+        axes.ticklabel_format(axis="y", style="sci", scilimits=(0, 0), useMathText=True)
+    if variable == "phi":
+        ratio_axes.set_xticks(np.pi * np.array([-1, -0.5, 0, 0.5, 1]))
+        ratio_axes.set_xticklabels([r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"])
+    axes.tick_params(axis="x", which="both", labelbottom=False)
+    low, high = ratio_axis_range(ratios) if ratio_range is None else ratio_range
+    ratio_axes.set_ylim(low, high)
+    set_ratio_ticks(ratio_axes, low, high)
+    return low, high
+
+
+def kinematics_legend(figure: Figure, colors: dict[float, str], baseline_label: str, top: float) -> None:
+    """One row above the panels: real data, the baseline, and each alpha; `top` in figure coordinates."""
+    handles = [Line2D([], [], color=REAL_DATA_COLOR, alpha=REAL_DATA_OPACITY, linewidth=HISTOGRAM_LINE_WIDTH,
+                      label="real data"),
+               Line2D([], [], color=BASELINE_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, linestyle="--",
+                      label=baseline_label)]
+    handles += [Line2D([], [], color=color, linewidth=HISTOGRAM_LINE_WIDTH, label=alpha_label(alpha))
+                for alpha, color in colors.items()]
+    figure.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.53, top), ncol=len(handles),
+                  columnspacing=KINEMATICS_LEGEND_SPACING, handlelength=2.0, borderaxespad=0.1)
+
+
+def checked_rows(rows: dict[int, dict[str, Panel]], variables: tuple[str, ...]) -> list[float]:
+    """The alphas of `rows`, the same in every panel; stops on a missing variable or a bad panel."""
+    if not rows:
+        raise ValueError("expected at least one particle type, got none")
+    alphas = None
+    for code, panels in rows.items():
+        if code not in PARTICLE_LABELS:
+            raise ValueError(f"particle type {code}: not one of ShellFlow's codes {sorted(PARTICLE_LABELS)}")
+        missing = [variable for variable in variables if variable not in panels]
+        if missing:
+            raise ValueError(f"particle type {code}: no panel of {missing}")
+        for variable in variables:
+            check_panel(panels[variable], f"particle type {code}, {variable}")
+            if alphas is None:
+                alphas = sorted(panels[variable].steered)
+            elif sorted(panels[variable].steered) != alphas:
+                raise ValueError(f"particle type {code}, {variable}: alphas {sorted(panels[variable].steered)}, "
+                                 f"other panels have {alphas}")
+    return alphas
+
+
+def kinematics_figure(panels: dict[str, Panel], *, particle: int, baseline_label: str,
+                      ratio_min_baseline: int) -> Figure:
+    """Fig. 4 of the paper: p_T, eta, and phi of the particles of type `particle` (13, the edited muons), real data,
+    baseline, and each alpha in counts, with steered over baseline below each panel.
+
+    panels: variable -> Panel from `kinematics.type_panels`, with at least "pt", "eta", and "phi". ratio_min_baseline:
+    the ratio panels leave out bins with fewer baseline particles; the paper draws every bin with one (1).
+    baseline_label: legend entry of the baseline, r"$\\mathtt{ShellFlow}$" in the paper.
+    """
+    variables = ("pt", "eta", "phi")
+    alphas = checked_rows({particle: panels}, variables)
+    colors = alpha_colors(alphas)
+    with style.context(STYLE_FILE):
+        figure = Figure(figsize=(TEXT_WIDTH, KINEMATICS_HEIGHT))
+        grid = figure.add_gridspec(2, len(variables), height_ratios=[2.3, 1.0], hspace=0.0, wspace=0.30, left=0.075,
+                                   right=0.995, bottom=0.15, top=0.81)
+        for column, variable in enumerate(variables):
+            axes = figure.add_subplot(grid[0, column])
+            ratio_axes = figure.add_subplot(grid[1, column], sharex=axes)
+            draw_kinematics_panel(axes, ratio_axes, variable, panels[variable], colors,
+                                  min_baseline=ratio_min_baseline, x_margin=1.3, top_factor=1.45,
+                                  start_below_decade=False, ratio_range=None)
+            right = variable in LOG_VARIABLES
+            axes.text(0.96 if right else 0.5, 0.95, PARTICLE_LABELS[particle][0], transform=axes.transAxes,
+                      va="top", ha="right" if right else "center", fontsize=7)
+            ratio_axes.set_xlabel(KINEMATICS_LABELS[variable], labelpad=1)
+            if column == 0:
+                axes.set_ylabel("counts", labelpad=1)
+                ratio_axes.set_ylabel("ratio", labelpad=1)
+        kinematics_legend(figure, colors, baseline_label, 0.885)
+        fit_to_width(figure, TEXT_WIDTH)
+    return figure
+
+
+def all_particles_figure(rows: dict[int, dict[str, Panel]], *, baseline_label: str, ratio_min_baseline: int,
+                         ratio_range: tuple[float, float]) -> Figure:
+    """Fig. 14 of the paper (App. D.1): p_T, eta, phi, and E of each particle type in `rows`, one row per type with a
+    bold title, real data, baseline, and each alpha in counts, with steered over baseline below each panel.
+
+    rows: ShellFlow type code -> variable -> Panel from `kinematics.type_panels`, in the order of the rows; the paper
+    shows electrons, photons, jets, large-R jets, and hadronic taus. The paper's figure also has the mass of the
+    massive types, which needs masses that four-momenta in float32 do not give (STRUCTURE.md). ratio_range: (low,
+    high) of every ratio panel; bins outside run off the panel; (0.9, 1.1) in the paper. ratio_min_baseline and
+    baseline_label: as in `kinematics_figure`.
+    """
+    alphas = checked_rows(rows, VARIABLES)
+    if len(ratio_range) != 2 or not 0 <= ratio_range[0] < 1 < ratio_range[1]:
+        raise ValueError(f"ratio_range: expected (low, high) with 0 <= low < 1 < high, got {ratio_range}")
+    colors = alpha_colors(alphas)
+    row_height = ROW_TITLE + ROW_GAP + ROW_PANELS + ROW_TICKS
+    height = ROW_LEGEND + row_height * len(rows) + ROW_FOOT
+    with style.context(STYLE_FILE):
+        figure = Figure(figsize=(TEXT_WIDTH, height))
+        down = lambda inches: 1 - inches / height       # inches from the top -> figure coordinates
+        for index, (code, panels) in enumerate(rows.items()):
+            row_top = ROW_LEGEND + index * row_height
+            figure.text(0.53, down(row_top), PARTICLE_LABELS[code][1], ha="center", va="top", fontsize=ROW_TITLE_SIZE)
+            panels_top = row_top + ROW_TITLE + ROW_GAP
+            grid = figure.add_gridspec(2, len(VARIABLES), height_ratios=[2.0, 1.0], hspace=0.0, wspace=0.38,
+                                       left=0.07, right=0.995, top=down(panels_top),
+                                       bottom=down(panels_top + ROW_PANELS))
+            for column, variable in enumerate(VARIABLES):
+                axes = figure.add_subplot(grid[0, column])
+                ratio_axes = figure.add_subplot(grid[1, column], sharex=axes)
+                draw_kinematics_panel(axes, ratio_axes, variable, panels[variable], colors,
+                                      min_baseline=ratio_min_baseline, x_margin=1.8, top_factor=1.3,
+                                      start_below_decade=True, ratio_range=ratio_range)
+                if index == len(rows) - 1:
+                    ratio_axes.set_xlabel(KINEMATICS_LABELS[variable], labelpad=1)
+                if column == 0:
+                    axes.set_ylabel("counts", labelpad=1)
+                    ratio_axes.set_ylabel("ratio", labelpad=1)
+        kinematics_legend(figure, colors, baseline_label, down(ROW_LEGEND))
+        fit_to_width(figure, TEXT_WIDTH)
     return figure
