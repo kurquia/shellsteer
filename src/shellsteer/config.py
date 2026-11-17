@@ -2,6 +2,9 @@
 
 pydantic checks the keys, the types, and the options from the type hints. An unknown key, a missing key, a wrong
 type, or a value outside its options stops with a pydantic ValidationError that names the key.
+
+A config runs one of two chains (cli.py): the steering run, with the sections steering, lineshape, and plots, or the
+mean ablation, with the section ablation instead. Each chain needs its own sections and stops on the other's.
 """
 
 from __future__ import annotations
@@ -75,6 +78,15 @@ class Steering(Section):
     seeds: list[int]
 
 
+class Ablation(Section):
+    """The mean ablation of paper Sec. 5.3: the target's steering vector at `block`, c_k from the directions sample."""
+    block: int
+    sample: Literal["directions", "steering"]
+    seeds: list[int]
+    peak_range: list[float]          # GeV: the histogram of the peak height, the Z zoom of paper Fig. 7
+    peak_bins: int
+
+
 class Readout(Section):
     spectrum_range: list[float]
     spectrum_bins: int
@@ -107,10 +119,11 @@ class Config(Section):
     sampler: Sampler
     gradients: Gradients
     steering_vectors: SteeringVectors
-    steering: Steering
+    steering: Steering | None = None
     readout: Readout
-    lineshape: Lineshape
-    plots: Plots
+    lineshape: Lineshape | None = None
+    plots: Plots | None = None
+    ablation: Ablation | None = None
 
     @model_validator(mode="after")
     def check(self):
@@ -133,13 +146,34 @@ class Config(Section):
             raise ValueError("classes.windows: windows overlap")
         if self.target not in self.classes.windows:
             raise ValueError(f"target: {self.target!r} is not one of {sorted(self.classes.windows)}")
-        if self.steering.block not in self.gradients.blocks:
-            raise ValueError(f"steering.block: block {self.steering.block} is not in gradients.blocks")
-        if 0 in self.steering.alphas:
-            raise ValueError("steering.alphas: leave out 0; the baseline always runs")
-        steps = self.steering.steps
-        if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
-            raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
+        steering_sections = {"steering": self.steering, "lineshape": self.lineshape, "plots": self.plots}
+        if self.ablation is None:
+            missing = [name for name, section in steering_sections.items() if section is None]
+            if missing:
+                raise ValueError(f"{', '.join(missing)}: required by the steering run (a config without an ablation "
+                                 f"section)")
+        else:
+            present = [name for name, section in steering_sections.items() if section is not None]
+            if present:
+                raise ValueError(f"{', '.join(present)}: the ablation run does not read these; leave them out of a "
+                                 f"config with an ablation section")
+        if self.steering is not None:
+            if self.steering.block not in self.gradients.blocks:
+                raise ValueError(f"steering.block: block {self.steering.block} is not in gradients.blocks")
+            if 0 in self.steering.alphas:
+                raise ValueError("steering.alphas: leave out 0; the baseline always runs")
+            steps = self.steering.steps
+            if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
+                raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
+        if self.ablation is not None:
+            if self.ablation.block not in self.gradients.blocks:
+                raise ValueError(f"ablation.block: block {self.ablation.block} is not in gradients.blocks")
+            if not self.ablation.seeds or len(set(self.ablation.seeds)) != len(self.ablation.seeds):
+                raise ValueError(f"ablation.seeds: need at least one seed and no repeats, got {self.ablation.seeds}")
+            peak = self.ablation.peak_range
+            if len(peak) != 2 or not 0 < peak[0] < peak[1] or self.ablation.peak_bins < 1:
+                raise ValueError(f"ablation.peak_range, peak_bins: need [low, high] with 0 < low < high and at least "
+                                 f"1 bin, got {peak} and {self.ablation.peak_bins}")
         # The checks below guard settings that the run reads only after the generation.
         spectrum = self.readout.spectrum_range
         if len(spectrum) != 2 or not 0 < spectrum[0] < spectrum[1]:
@@ -147,10 +181,10 @@ class Config(Section):
         if not spectrum[0] < self.readout.r60_max_mass <= spectrum[1]:
             raise ValueError(f"readout.r60_max_mass: need it inside readout.spectrum_range {spectrum}, "
                              f"got {self.readout.r60_max_mass}")
-        if self.lineshape.half_width <= 0 or self.lineshape.bins <= 5:
+        if self.lineshape is not None and (self.lineshape.half_width <= 0 or self.lineshape.bins <= 5):
             raise ValueError(f"lineshape: need half_width > 0 and more bins than the 5 fitted parameters, got "
                              f"half_width {self.lineshape.half_width} and bins {self.lineshape.bins}")
-        for label, zoom in self.plots.zooms.items():
+        for label, zoom in (self.plots.zooms if self.plots is not None else {}).items():
             if len(zoom) != 2 or not 0 < zoom[0] < zoom[1]:
                 raise ValueError(f"plots.zooms[{label!r}]: need [low, high] with 0 < low < high, got {zoom}")
         return self

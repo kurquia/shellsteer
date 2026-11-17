@@ -7,6 +7,8 @@ calls through `generate(..., on_step=...)`.
 Probe: adds zeros to the two tokens of the pair, one zero tensor per step. The events do not change, and after the
     backward pass the gradient of `probe.delta` at step k is G_p(t_k) of every pair.
 Steer: adds alpha xi^-(t_k) to the negative token and alpha xi^+(t_k) to the positive token.
+Ablate: the mean ablation of Sec. 5.3 (Eq. 24): sets the projection of the pair's two tokens on xi(t_k) to c_k.
+Record: keeps a copy of the pair's two tokens at every step, for the mean c_k of Eq. 25.
 """
 
 from __future__ import annotations
@@ -112,3 +114,79 @@ class Steer:
             scale = h.norm(dim=-1, keepdim=True) / out.norm(dim=-1, keepdim=True)
             out = torch.where(edited, out * scale, out)
         return out
+
+
+def pair_tokens(h: torch.Tensor, rows: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> torch.Tensor:
+    """(B, 2 width): the negative and the positive token of each pair side by side, the layout of xi.flatten(1)."""
+    return torch.cat((h[rows, minus], h[rows, plus]), dim=-1)
+
+
+class Ablate:
+    """Sets the projection of the pair's two tokens on the unit vector xi(t_k) to c_k at step k (paper Eq. 24).
+
+    The projection is over both tokens together, negative token first. Only the two tokens of the pair change; the
+    edit is computed in float64 and cast back to the stream's dtype, as in the paper's code.
+    xi: (steps, 2, width), unit length over both tokens at every step, as from `load_steering_vector`.
+    mean: (steps,) c_k, the target projection; `activation_means.mean_projection` gives the paper's (Eq. 25).
+    minus, plus: (B,) slot of the negative and the positive particle of each pair.
+    """
+
+    def __init__(self, xi: torch.Tensor, mean: torch.Tensor, minus: torch.Tensor, plus: torch.Tensor) -> None:
+        if xi.dim() != 3 or xi.shape[1] != 2:
+            raise ValueError(f"xi has shape {tuple(xi.shape)}, expected (steps, 2, width)")
+        if mean.shape != (xi.shape[0],):
+            raise ValueError(f"mean has shape {tuple(mean.shape)}, expected ({xi.shape[0]},), one c_k per step of xi")
+        flat = xi.flatten(1).double()
+        norm = flat.norm(dim=1, keepdim=True)
+        if not torch.allclose(norm, torch.ones_like(norm), rtol=0, atol=1e-5):
+            raise ValueError(f"xi has length {norm.min().item():.6g} to {norm.max().item():.6g} over the steps; the "
+                             f"ablation needs unit length at every step, as `load_steering_vector` gives")
+        self.unit = flat / norm             # renormalised in float64, as the paper's code
+        self.mean = mean.double()
+        self.width = xi.shape[-1]
+        self.rows = torch.arange(len(minus), device=minus.device)
+        self.minus, self.plus = minus, plus
+        self.step = 0
+
+    def set_step(self, k: int) -> None:
+        if k >= self.unit.shape[0]:
+            raise ValueError(f"step {k}, but xi has only {self.unit.shape[0]} steps")
+        self.step = k
+
+    def __call__(self, h: torch.Tensor) -> torch.Tensor:
+        check_width(h, self.width, "xi")
+        unit, mean = self.unit[self.step].to(h.device), self.mean[self.step].to(h.device)
+        x = pair_tokens(h, self.rows, self.minus, self.plus).double()
+        projection = x @ unit
+        new = (x - (projection - mean).unsqueeze(-1) * unit).to(h.dtype)
+        out = h.clone()
+        out[self.rows, self.minus] = new[:, :self.width]
+        out[self.rows, self.plus] = new[:, self.width:]
+        return out
+
+
+class Record:
+    """Keeps the pair's two tokens at every step in `tokens`, (steps, B, 2 width) on the stream's device and dtype.
+
+    The stream passes unchanged. minus, plus: (B,) slot of the negative and the positive particle of each pair.
+    """
+
+    def __init__(self, network: Network, steps: int, minus: torch.Tensor, plus: torch.Tensor) -> None:
+        self.width = network.model.d_model
+        self.rows = torch.arange(len(minus), device=minus.device)
+        self.minus, self.plus = minus, plus
+        self.tokens: torch.Tensor | None = None
+        self.steps = steps
+        self.step = 0
+
+    def set_step(self, k: int) -> None:
+        if k >= self.steps:
+            raise ValueError(f"step {k}, but the record has only {self.steps} steps")
+        self.step = k
+
+    def __call__(self, h: torch.Tensor) -> torch.Tensor:
+        check_width(h, self.width, "the record")
+        if self.tokens is None:
+            self.tokens = torch.zeros(self.steps, len(self.rows), 2 * self.width, dtype=h.dtype, device=h.device)
+        self.tokens[self.step] = pair_tokens(h, self.rows, self.minus, self.plus).detach()
+        return h

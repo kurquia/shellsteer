@@ -8,6 +8,10 @@ pairs. Masses are in GeV, of the kept pairs only.
 standard deviation over seeds for each alpha (App. B.1). `pole_response_fit` (Eq. 21) and `pair_response_fit`
 (Eq. 20, App. D.3) fit the first-order response of the pole and of each pair; compare the slopes with
 `steering_vectors.gradient_response`. The two fits differ as in the paper: log M for the pole, GeV for the pairs.
+
+The numbers of the mean ablation (Sec. 5.3, Fig. 7) compare the ablated and the baseline generation of each seed:
+`window_log_spread` (the spread of the Z peak, x1.18), `peak_height_change` (the Z peak, -28 %), and
+`below_mass_deviation` (the spectrum below 60 GeV, 0.89 % on the seed-average histograms).
 """
 
 from __future__ import annotations
@@ -222,3 +226,62 @@ def pair_response_fit(alpha: np.ndarray, masses: np.ndarray, *, tolerance: float
         raise ValueError(f"the fit did not converge in {max_iterations} iterations for {int(moving.sum())} pairs, "
                          f"the first at pair {int(np.flatnonzero(moving)[0])}")
     return s, r_squared(masses, baseline * np.exp(a * s))
+
+
+def window_log_spread(mass: np.ndarray, window: tuple[float, float]) -> float:
+    """Standard deviation of log m over the pairs with mass inside the open `window` in GeV (paper Sec. 5.3).
+
+    The spread of the Z peak: the paper's ratio x1.177 is the mean over three seeds of this spread of the ablated
+    masses over that of the baseline masses, each over its own pairs inside the window. Divides by the number of
+    pairs, as numpy's std.
+    """
+    mass = np.asarray(mass, dtype=np.float64)
+    if mass.ndim != 1:
+        raise ValueError(f"mass: expected shape (pairs,), got {mass.shape}")
+    low, high = window
+    inside = mass[(mass > low) & (mass < high)]
+    if len(inside) < 2:
+        raise ValueError(f"window [{low}, {high}] GeV: {len(inside)} pairs inside, the spread needs at least 2")
+    return float(np.log(inside).std())
+
+
+def peak_height_change(steered_counts: np.ndarray, baseline_counts: np.ndarray) -> float:
+    """Highest bin of `steered_counts` over highest bin of `baseline_counts`, minus 1 (paper Sec. 5.3).
+
+    The paper's -28 % for the Z under the mean ablation uses the Z zoom of Fig. 7 (50-140 GeV, 100 equal bins) of the
+    histograms averaged over three seeds. The two highest bins need not be the same bin.
+    """
+    steered_counts = np.asarray(steered_counts, dtype=np.float64)
+    baseline_counts = np.asarray(baseline_counts, dtype=np.float64)
+    if steered_counts.ndim != 1 or steered_counts.shape != baseline_counts.shape:
+        raise ValueError(f"counts: expected two histograms of the same bins, got shapes {steered_counts.shape} and "
+                         f"{baseline_counts.shape}")
+    if baseline_counts.max(initial=0) <= 0:
+        raise ValueError("baseline_counts: no pair in any bin")
+    return float(steered_counts.max() / baseline_counts.max() - 1)
+
+
+def below_mass_deviation(steered_counts: np.ndarray, baseline_counts: np.ndarray, *, edges: np.ndarray,
+                         max_mass: float, min_baseline_pairs: float) -> float:
+    """Mean of |N_b / N_b^baseline - 1| over the bins whose lower edge is below `max_mass` and whose baseline holds at
+    least `min_baseline_pairs`, as a fraction (paper Sec. 5.3).
+
+    The statistic of Eq. 19 on histograms, which may be averages over seeds. The paper's 0.89 % for the mean ablation
+    uses the seed-average histograms of three seeds, 200 bins equally spaced in log m over 0.3-300 GeV, max_mass =
+    60 GeV, and min_baseline_pairs = 20, which gives 154 bins. Unlike `r60`, which selects bins by their centre (153
+    bins), the bins are selected by their lower edge, as in the script that made the paper's number.
+    """
+    steered_counts = np.asarray(steered_counts, dtype=np.float64)
+    baseline_counts = np.asarray(baseline_counts, dtype=np.float64)
+    edges = np.asarray(edges, dtype=np.float64)
+    shapes_agree = steered_counts.shape == baseline_counts.shape and edges.shape == (len(steered_counts) + 1,)
+    if steered_counts.ndim != 1 or not shapes_agree:
+        raise ValueError(f"counts and edges: expected two histograms of (bins,) and edges of (bins + 1,), got shapes "
+                         f"{steered_counts.shape}, {baseline_counts.shape}, and {edges.shape}")
+    if min_baseline_pairs <= 0:
+        raise ValueError(f"min_baseline_pairs: need more than 0, got {min_baseline_pairs}")
+    selected = (edges[:-1] < max_mass) & (baseline_counts >= min_baseline_pairs)
+    if not selected.any():
+        raise ValueError(f"no bin with its lower edge below {max_mass} GeV has {min_baseline_pairs} or more baseline "
+                         f"pairs")
+    return float(np.mean(np.abs(steered_counts[selected] / baseline_counts[selected] - 1)))

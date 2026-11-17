@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from scipy.optimize import minimize_scalar
 
-from shellsteer.metrics import (log_bin_edges, pair_response_fit, pole_response_fit, r60, selectivity_curve,
-                                target_shift)
+from shellsteer.metrics import (below_mass_deviation, log_bin_edges, pair_response_fit, peak_height_change,
+                                pole_response_fit, r60, selectivity_curve, target_shift, window_log_spread)
 
 EDGES = log_bin_edges(0.3, 300, 200)                       # the paper's binning
 SETTINGS = dict(edges=EDGES, max_mass=60, min_baseline_pairs=20)
@@ -209,3 +209,33 @@ def test_response_fits_stop_on_bad_masses():
 def test_r2_of_a_mass_that_never_moves_stops():
     with pytest.raises(ValueError, match="R\\^2 is undefined: 1 series have the same value at every alpha"):
         pair_response_fit(ALPHAS, np.full((13, 1), 91.0))
+
+
+# ---------------------------------------------------------------- the numbers of the mean ablation (Sec. 5.3)
+
+def test_window_log_spread_uses_only_the_pairs_inside_the_open_window():
+    inside = np.array([85.0, 90.0, 95.0])
+    mass = np.concatenate([inside, [81.19, 101.19, 3.1, 200.0]])        # the edges are outside: open interval
+    assert window_log_spread(mass, (81.19, 101.19)) == pytest.approx(np.log(inside).std())
+    with pytest.raises(ValueError, match="1 pairs inside"):
+        window_log_spread(np.array([90.0, 3.0]), (81.19, 101.19))
+
+
+def test_peak_height_change_compares_the_highest_bins():
+    baseline = np.array([10.0, 100.0, 40.0])
+    ablated = np.array([60.0, 72.0, 50.0])                              # the highest bin need not move
+    assert peak_height_change(ablated, baseline) == pytest.approx(-0.28)
+    with pytest.raises(ValueError, match="same bins"):
+        peak_height_change(ablated, baseline[:2])
+
+
+def test_below_mass_deviation_selects_bins_by_their_lower_edge():
+    """The paper's binning gives 154 bins with the lower edge below 60 GeV, one more than r60's 153."""
+    baseline = np.full(200, 100.0)
+    ablated = baseline.copy()
+    low = EDGES[:-1] < 60
+    assert low.sum() == 154
+    ablated[np.flatnonzero(low)[-1]] = 254.0                            # only the extra bin moves: +154 %
+    assert below_mass_deviation(ablated, baseline, **SETTINGS) == pytest.approx(1.54 / 154)
+    baseline[0] = 19.5                                                  # seed averages: fractional counts
+    assert below_mass_deviation(ablated, baseline, **SETTINGS) == pytest.approx(1.54 / 153)
