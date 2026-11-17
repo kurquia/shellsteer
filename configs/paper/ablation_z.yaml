@@ -1,0 +1,50 @@
+# Paper Sec. 5.3: mean ablation of the Z steering vector at block 1 (Eq. 24), with c_k from Eq. 25.
+# The sections up to steering_vectors are those of main_z_block1.yaml. Run with `steer all` (cli.py, ablation chain).
+
+name: ablation_z
+network: shellflow
+networks: ../networks.yaml          # relative to this file
+datasets: ../datasets.yaml          # relative to this file
+classes: ../classes.yaml            # relative to this file
+target: Z
+
+# Which events, and how many.
+events:
+  dataset: validation_muon_pairs
+  directions: 1040000               # events for the gradients and the steering vectors
+  steering: 1040000                 # events we steer and generate
+  keep: 1000000                     # pairs of each sample that enter the classes: lowest priority, with a class
+
+# The Euler sampler that generates the events.
+sampler:
+  steps: 200
+  batch_size: 8192
+  precision: float32
+
+# Gradients of log m of the pair with respect to the residual stream, on the directions sample.
+gradients:
+  blocks: [0, 1, 2, 3, 4, 5]
+  seed: 2040
+
+# Steering vectors from the class moments of the gradients.
+steering_vectors:
+  method: fkt                       # fkt | fisher | meandiff
+  in_time: per_step                 # per_step | constant
+  balance: equal                    # equal | by_count
+
+# The mean ablation of Eq. 24 on the pair's two tokens at the output of block L, at every Euler step.
+# c_k (Eq. 25): mean of xi(t_k) . h_L over the kept pairs of every class of the directions sample, one forward pass
+# without edits with the noise of gradients.seed (activation_means.npz).
+ablation:
+  block: 1
+  sample: directions                # directions | steering: the events ablated and generated again as baseline
+  seeds: [2040, 2041, 2042]
+  peak_range: [50, 140]             # GeV; the Z zoom of Fig. 7, for the change of the peak height
+  peak_bins: 100
+
+# Histograms of the generated spectra and the deviation below 60 GeV (paper Eq. 19, Sec. 5.3).
+readout:
+  spectrum_range: [0.3, 300]        # GeV; bins equally spaced in log m
+  spectrum_bins: 200
+  r60_max_mass: 60                  # GeV; R_60 per seed: bins with centre below; Sec. 5.3 deviation: lower edge below
+  r60_min_baseline_pairs: 20        # R_60 leaves out bins with fewer baseline pairs

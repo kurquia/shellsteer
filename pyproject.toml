@@ -15,6 +15,9 @@ dependencies = [
     "matplotlib>=3.8",
 ]
 
+[project.scripts]
+steer = "shellsteer.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 

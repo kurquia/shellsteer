@@ -1,0 +1,66 @@
+# Paper App. B: steering of the Z boson at block 1 with the difference-of-means steering vector (Eqs. 35 and 39).
+# Everything but the method and the alphas is as in main_z_block1.yaml. Fisher: methods_z_fisher.yaml.
+
+name: methods_z_meandiff
+network: shellflow
+networks: ../networks.yaml          # relative to this file
+datasets: ../datasets.yaml          # relative to this file
+classes: ../classes.yaml            # relative to this file
+target: Z
+
+# Which events, and how many.
+events:
+  dataset: validation_muon_pairs
+  directions: 1040000               # events for the gradients and the steering vectors
+  steering: 1040000                 # events we steer and generate
+  keep: 1000000                     # pairs of each sample that enter the classes: lowest priority, with a class
+
+# The Euler sampler that generates the events.
+sampler:
+  steps: 200
+  batch_size: 8192
+  precision: float32
+
+# Gradients of log m of the pair with respect to the residual stream, on the directions sample.
+gradients:
+  blocks: [0, 1, 2, 3, 4, 5]
+  seed: 2040
+
+# Steering vectors from the class moments of the gradients.
+steering_vectors:
+  method: meandiff                  # fkt | fisher | meandiff
+  in_time: per_step                 # per_step | constant
+  balance: equal                    # every other class with the same weight, as for FKT (App. B)
+
+# The edit h_L -> h_L + alpha xi(t), on the steering sample.
+steering:
+  block: 1
+  alphas: [-1, -0.5, -0.25, 0.25, 0.5, 1]   # Fig. 10; Fig. 8 shows +-0.25, +-0.5. At +-2 no Z peak is left to fit
+  tokens: pair                      # pair | minus | plus | all_of_type
+  steps: all                        # all | [first, last]
+  norm_restore: false
+  seeds: [2041, 2042, 2043]         # Fig. 10 averages the three; Fig. 8 shows seed 2041
+
+# Histograms and the selectivity metric of the generated spectra (paper Eq. 19).
+readout:
+  spectrum_range: [0.3, 300]        # GeV; bins equally spaced in log m
+  spectrum_bins: 200
+  r60_max_mass: 60                  # GeV; R_60 uses the bins whose centre is below this mass
+  r60_min_baseline_pairs: 20        # R_60 leaves out bins with fewer baseline pairs
+
+# The fit of the Z lineshape (paper App. E), for each seed and alpha.
+lineshape:
+  half_width: 0.25                  # half the width of the fit window in log m
+  bins: 100                         # bins of equal width in log m in the fit window
+  min_window_pairs: 50              # pairs in the Z window needed to centre the fit
+
+# Figures (paper Figs. 8 and 10); labels are matplotlib mathtext.
+plots:
+  zooms:                            # GeV; one zoom panel each, left to right
+    '$J/\psi$': [2.0, 4.5]
+    '$\Upsilon$': [6.0, 14.0]
+    '$Z$': [50, 140]
+  zoom_bins: 100
+  baseline_label: '$\mathtt{ShellFlow}$'
+  pair_label: '\mu\mu'
+  target_label: '$Z$'
