@@ -28,7 +28,7 @@ This repository holds the code, the configs, and the steering vectors of the pap
 Each particle is one token, and the network has six transformer blocks with a residual stream of width 128.
 `shellsteer` adds a vector to the residual stream of the two muon tokens at the output of one block, at every Euler step:
 
-$$\mathbf{h}_L^{\mu^\pm} \to \mathbf{h}_L^{\mu^\pm} + \alpha\, \boldsymbol{\xi}^{\pm}(t)$$
+$$\mathbf{h}_L^{\mu^\pm} \to \mathbf{h}_L^{\mu^\pm} + \alpha \boldsymbol{\xi}^{\pm}(t)$$
 
 <p align="center">
 <img src="docs/figures/fig2_block.png" alt="One transformer block of ShellFlow; the steering vector is added to the muon tokens at the output of the block" width="90%">
