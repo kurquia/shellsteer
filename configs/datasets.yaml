@@ -1,5 +1,6 @@
-# Event samples the pipeline can load, by name. Each holds two samples of the same pair type:
-# directions (gradients and steering vectors) and steering (the events we steer and generate).
+# Event samples the pipeline can load, by name. A dataset of pairs holds two samples of the same pair type:
+# directions (gradients and steering vectors) and steering (the events we steer and generate). A dataset of every
+# final state (pair: null) holds only a steering sample; a run names it in events.steering_dataset.
 # revision: the commit of the Hugging Face repository, so the same files always load.
 # events: number of events in each file.
 
@@ -11,3 +12,14 @@ validation_muon_pairs:
     steering: steering-dataset.npz
   pair: muon                     # muon | electron | tau
   events: 1040000
+
+# Sample C of paper Fig. 4: 1,000,000 validation events of every final state, with zero, one, or several muons. It has
+# no pairs (pair: null), so no directions sample and no priority; every event is used, in file order. The file holds
+# the real four-momenta p4 of every particle; m_real is NaN except in events with exactly one muon pair.
+validation_all_final_states:
+  hf_repo: kurquia/shellsteer-events
+  revision: ed05bb9ac082d25ce67a0578a819b4eb15d89434
+  files:
+    steering: all-final-states-dataset.npz
+  pair: null
+  events: 1000000

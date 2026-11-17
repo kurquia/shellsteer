@@ -3,8 +3,13 @@
 pydantic checks the keys, the types, and the options from the type hints. An unknown key, a missing key, a wrong
 type, or a value outside its options stops with a pydantic ValidationError that names the key.
 
-A config runs one of two chains (cli.py): the steering run, with the sections steering, lineshape, and plots, or the
-mean ablation, with the section ablation instead. Each chain needs its own sections and stops on the other's.
+A config runs one of three chains (cli.py), and `Config.chain` says which:
+
+    steering:   steering, readout, lineshape, and plots; the steering sample holds muon pairs.
+    kinematics: steering and kinematics; the steering sample holds every final state (events.steering_dataset).
+    ablation:   ablation and readout.
+
+Each chain needs its own sections and stops on the sections of the others.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ class NetworkEntry(Section):
 
 
 class DatasetFiles(Section):
-    directions: str
+    directions: str | None = None    # only a dataset of pairs has a directions sample
     steering: str
 
 
@@ -36,8 +41,18 @@ class DatasetEntry(Section):
     hf_repo: str
     revision: str
     files: DatasetFiles
-    pair: Literal["muon", "electron", "tau"]
+    # The pair type of every event, or None (null in YAML) for events of every final state, which have no pair.
+    pair: Literal["muon", "electron", "tau"] | None
     events: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.pair is not None and self.files.directions is None:
+            raise ValueError(f"files.directions: a dataset of {self.pair} pairs needs a directions sample")
+        if self.pair is None and self.files.directions is not None:
+            raise ValueError("files.directions: a dataset without pairs (pair: null) has no directions sample; the "
+                             "gradients are those of the pair mass")
+        return self
 
 
 class Classes(Section):
@@ -46,7 +61,10 @@ class Classes(Section):
 
 
 class Events(Section):
-    dataset: str
+    dataset: str                     # the directions sample, and the steering sample unless steering_dataset is set
+    # The dataset of the steering sample if it is not events.dataset, such as the events of every final state of
+    # paper Fig. 4. None: events.dataset.
+    steering_dataset: str | None = None
     directions: int
     steering: int
     keep: int
@@ -114,6 +132,16 @@ class Lineshape(Section):
     min_window_pairs: int
 
 
+class Kinematics(Section):
+    """Paper Fig. 4 and Fig. 14 (App. D.1): the kinematics of every particle type of a steering sample of every final
+    state."""
+    bins: int                        # equal bins per panel: in log for p_T and E, linear for eta and phi
+    readout_min_baseline: int        # the largest change per bin counts bins with at least this many baseline particles
+    ratio_min_baseline: int          # ratio panels: drawn in bins with at least this many baseline particles
+    other_types_ratio_range: list[float]   # y range of every ratio panel of Fig. 14; Fig. 4 scales each panel
+    baseline_label: str
+
+
 class Plots(Section):
     zooms: dict[str, list[float]]
     zoom_bins: int
@@ -134,23 +162,46 @@ class Config(Section):
     gradients: Gradients
     steering_vectors: SteeringVectors
     steering: Steering | None = None
-    readout: Readout
+    readout: Readout | None = None
     lineshape: Lineshape | None = None
     plots: Plots | None = None
+    kinematics: Kinematics | None = None
     ablation: Ablation | None = None
+
+    def dataset(self, sample: Literal["directions", "steering"]) -> DatasetEntry:
+        """The datasets.yaml entry of the directions or the steering sample."""
+        if sample == "steering" and self.events.steering_dataset is not None:
+            return self.datasets[self.events.steering_dataset]
+        return self.datasets[self.events.dataset]
+
+    @property
+    def chain(self) -> Literal["steering", "kinematics", "ablation"]:
+        """The run of this config: ablation with an ablation section, else kinematics if the steering sample has no
+        pairs, else steering."""
+        if self.ablation is not None:
+            return "ablation"
+        return "kinematics" if self.dataset("steering").pair is None else "steering"
 
     @model_validator(mode="after")
     def check(self):
         if self.network not in self.networks:
             raise ValueError(f"network: {self.network!r} has no entry in the networks file")
-        dataset = self.datasets.get(self.events.dataset)
-        if dataset is None:
-            raise ValueError(f"events.dataset: {self.events.dataset!r} has no entry in the datasets file")
+        for key in ("dataset", "steering_dataset"):
+            name = getattr(self.events, key)
+            if name is not None and name not in self.datasets:
+                raise ValueError(f"events.{key}: {name!r} has no entry in the datasets file")
+        if self.dataset("directions").pair is None:
+            raise ValueError(f"events.dataset: {self.events.dataset!r} has no pairs (pair: null), so it has no "
+                             f"directions sample; name it in events.steering_dataset")
+        steering_pair = self.dataset("steering").pair
+        if steering_pair is not None and steering_pair != self.dataset("directions").pair:
+            raise ValueError(f"events.steering_dataset: {self.events.steering_dataset!r} holds {steering_pair} pairs, "
+                             f"the steering vectors come from {self.dataset('directions').pair} pairs")
         for sample in ("directions", "steering"):
-            n = getattr(self.events, sample)
-            if not 0 < n <= dataset.events:
-                raise ValueError(f"events.{sample}: need 0 < n <= {dataset.events} (events in the file), got {n}")
-            if self.events.keep > n:
+            n, size = getattr(self.events, sample), self.dataset(sample).events
+            if not 0 < n <= size:
+                raise ValueError(f"events.{sample}: need 0 < n <= {size} (events in the file), got {n}")
+            if self.events.keep > n and self.dataset(sample).pair is not None:
                 raise ValueError(f"events.keep: {self.events.keep} is more than the {n} events of events.{sample}")
         windows = sorted(self.classes.windows.values())
         for lo, hi in windows:
@@ -160,17 +211,36 @@ class Config(Section):
             raise ValueError("classes.windows: windows overlap")
         if self.target not in self.classes.windows:
             raise ValueError(f"target: {self.target!r} is not one of {sorted(self.classes.windows)}")
-        steering_sections = {"steering": self.steering, "lineshape": self.lineshape, "plots": self.plots}
-        if self.ablation is None:
-            missing = [name for name, section in steering_sections.items() if section is None]
-            if missing:
-                raise ValueError(f"{', '.join(missing)}: required by the steering run (a config without an ablation "
-                                 f"section)")
-        else:
-            present = [name for name, section in steering_sections.items() if section is not None]
-            if present:
-                raise ValueError(f"{', '.join(present)}: the ablation run does not read these; leave them out of a "
-                                 f"config with an ablation section")
+        sections = {"steering": self.steering, "readout": self.readout, "lineshape": self.lineshape,
+                    "plots": self.plots, "kinematics": self.kinematics}
+        needed = {"steering": ("steering", "readout", "lineshape", "plots"), "kinematics": ("steering", "kinematics"),
+                  "ablation": ("readout",)}[self.chain]
+        which = {"steering": "a config without an ablation section and a steering sample of pairs",
+                 "kinematics": "a config whose steering sample has no pairs (events.steering_dataset)",
+                 "ablation": "a config with an ablation section"}[self.chain]
+        missing = [name for name in needed if sections[name] is None]
+        if missing:
+            raise ValueError(f"{', '.join(missing)}: required by the {self.chain} run ({which})")
+        present = [name for name, section in sections.items() if section is not None and name not in needed]
+        if present:
+            raise ValueError(f"{', '.join(present)}: the {self.chain} run does not read these; leave them out of "
+                             f"{which}")
+        if self.chain == "kinematics":
+            if self.steering.tokens != "all_of_type":
+                raise ValueError(f"steering.tokens: {self.steering.tokens!r} needs a pair; the steering sample "
+                                 f"{self.events.steering_dataset!r} has none, so use all_of_type")
+            if len(self.steering.seeds) != 1:
+                raise ValueError(f"steering.seeds: the kinematics run draws one generation per alpha, so it takes "
+                                 f"one seed, got {self.steering.seeds}")
+            kinematics = self.kinematics
+            if kinematics.bins < 1 or kinematics.readout_min_baseline < 1 or kinematics.ratio_min_baseline < 1:
+                raise ValueError(f"kinematics: need bins, readout_min_baseline, and ratio_min_baseline >= 1, got "
+                                 f"{kinematics.bins}, {kinematics.readout_min_baseline}, and "
+                                 f"{kinematics.ratio_min_baseline}")
+            ratio = kinematics.other_types_ratio_range
+            if len(ratio) != 2 or not 0 <= ratio[0] < 1 < ratio[1]:
+                raise ValueError(f"kinematics.other_types_ratio_range: need [low, high] with 0 <= low < 1 < high, "
+                                 f"got {ratio}")
         if self.steering is not None:
             if self.steering.block not in self.gradients.blocks:
                 raise ValueError(f"steering.block: block {self.steering.block} is not in gradients.blocks")
@@ -180,6 +250,9 @@ class Config(Section):
             if steps != "all" and (len(steps) != 2 or not 0 <= steps[0] <= steps[1] < self.sampler.steps):
                 raise ValueError(f"steering.steps: need 0 <= first <= last < {self.sampler.steps}, got {list(steps)}")
         if self.ablation is not None:
+            if self.ablation.sample == "steering" and self.dataset("steering").pair is None:
+                raise ValueError(f"ablation.sample: the steering sample {self.events.steering_dataset!r} has no "
+                                 f"pairs, and the ablation edits the pair's tokens")
             if self.ablation.block not in self.gradients.blocks:
                 raise ValueError(f"ablation.block: block {self.ablation.block} is not in gradients.blocks")
             if not self.ablation.seeds or len(set(self.ablation.seeds)) != len(self.ablation.seeds):
@@ -195,12 +268,13 @@ class Config(Section):
             if len(ratio) != 2 or not 0 <= ratio[0] < ratio[1]:
                 raise ValueError(f"ablation.figure.ratio_range: need [low, high] with 0 <= low < high, got {ratio}")
         # The checks below guard settings that the run reads only after the generation.
-        spectrum = self.readout.spectrum_range
-        if len(spectrum) != 2 or not 0 < spectrum[0] < spectrum[1]:
-            raise ValueError(f"readout.spectrum_range: need [low, high] with 0 < low < high, got {spectrum}")
-        if not spectrum[0] < self.readout.r60_max_mass <= spectrum[1]:
-            raise ValueError(f"readout.r60_max_mass: need it inside readout.spectrum_range {spectrum}, "
-                             f"got {self.readout.r60_max_mass}")
+        if self.readout is not None:
+            spectrum = self.readout.spectrum_range
+            if len(spectrum) != 2 or not 0 < spectrum[0] < spectrum[1]:
+                raise ValueError(f"readout.spectrum_range: need [low, high] with 0 < low < high, got {spectrum}")
+            if not spectrum[0] < self.readout.r60_max_mass <= spectrum[1]:
+                raise ValueError(f"readout.r60_max_mass: need it inside readout.spectrum_range {spectrum}, "
+                                 f"got {self.readout.r60_max_mass}")
         if self.lineshape is not None and (self.lineshape.half_width <= 0 or self.lineshape.bins <= 5):
             raise ValueError(f"lineshape: need half_width > 0 and more bins than the 5 fitted parameters, got "
                              f"half_width {self.lineshape.half_width} and bins {self.lineshape.bins}")
