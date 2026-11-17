@@ -49,9 +49,9 @@ from shellsteer.sampler import NanError
 from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_pairs,
                                            generated_path, kept_path, load_generated, load_kept, save_generated,
                                            save_kept)
-from shellsteer.steering_vectors import (check_steering_vectors_file, gradient_response, gradient_responses,
-                                        load_gradient_response, load_steering_vector, save_steering_vectors,
-                                        steering_vectors)
+from shellsteer.steering_vectors import (check_steering_vectors_file, gradient_response,
+                                        gradient_responses_per_step, load_gradient_response_per_step,
+                                        load_steering_vector, save_steering_vectors, steering_vectors)
 
 CONFIG_FILE = "config.yaml"
 MOMENTS_FILE = "gradient_moments.npz"
@@ -245,18 +245,18 @@ def run_steering_vectors(config: Config, run: Path, device: str) -> None:
     moments, moments_metadata = load_moments(require(run / MOMENTS_FILE, "gradients"))
     vectors = steering_vectors(moments, method.method, method.in_time, method.balance)
     # S as the edit applies xi, in float32 (load_steering_vector).
-    responses = gradient_responses(moments, vectors.astype(np.float32))
+    responses = gradient_responses_per_step(moments, vectors.astype(np.float32))
     gradient_pass = {key: moments_metadata[key] for key in ("dataset", "events", "keep", "seed", "blocks",
                                                             "batch_size", "device")}
     save_steering_vectors(run / VECTORS_FILE, vectors, moments["classes"], moments["blocks"], {
         **settings, "gradient moments file": MOMENTS_FILE, "steps": moments_metadata["steps"],
         "classes": config.classes.model_dump(), "network": moments_metadata["network"],
-        "gradient pass": gradient_pass}, gradient_response=responses)
+        "gradient pass": gradient_pass}, response_per_step=responses)
     log(stage, f"{method.method}, {method.in_time}, balance {method.balance}: vectors of shape {vectors.shape} "
                f"(classes, blocks, steps, 2, width)")
     target = [str(name) for name in moments["classes"]].index(config.target)
     log(stage, f"gradient response S of the {config.target} vector (Eq. 21): " + ", ".join(
-        f"block {int(block)} {responses[target, b]:.4f}" for b, block in enumerate(moments["blocks"])))
+        f"block {int(block)} {responses[target, b].sum():.4f}" for b, block in enumerate(moments["blocks"])))
     log(stage, f"wrote {run / VECTORS_FILE}")
 
 
@@ -322,13 +322,14 @@ def counted_pairs(run: Path, seed: int) -> tuple[np.ndarray, np.ndarray]:
 def first_order_slope(config: Config, run: Path) -> tuple[float | None, str]:
     """S (Eq. 21) of the target's vector at steering.block and the file it comes from; or None and the reason.
 
-    The vectors file stores S since `steer steering-vectors` writes it. For a vectors file without S, S comes from
-    the run's gradient_moments.npz if the run made its own vectors; a run started from a file has no moments.
+    S is the sum over the Euler steps of the response per step that `steer steering-vectors` stores in the vectors
+    file. For a vectors file without it, S comes from the run's gradient_moments.npz if the run made its own
+    vectors; a run started from a file has no moments.
     """
     vectors_file = require(run / VECTORS_FILE, "steering-vectors")
-    s = load_gradient_response(vectors_file, config.target, config.steering.block)
-    if s is not None:
-        return s, VECTORS_FILE
+    per_step = load_gradient_response_per_step(vectors_file, config.target, config.steering.block)
+    if per_step is not None:
+        return float(per_step.sum()), VECTORS_FILE
     from_file = config.steering_vectors.from_file
     if from_file is None:
         moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))

@@ -22,7 +22,8 @@ import numpy as np
 import scipy.linalg
 import torch
 
-GRADIENT_RESPONSE_KEY = "gradient response"   # (classes, blocks) S in a vectors file; files from before it lack it
+# (classes, blocks, steps) S_C(t_k) in a vectors file; the sum over k is S (Eq. 21). Files from before it lack it.
+GRADIENT_RESPONSE_KEY = "gradient response per step"
 NETWORK_KEYS = ("hf_repo", "revision", "file")  # the network entries a vectors file is checked on
 
 Method = Literal["fkt", "fisher", "meandiff"]
@@ -134,34 +135,36 @@ def steering_vectors(moments: dict[str, np.ndarray], method: Method, in_time: In
 
 
 def save_steering_vectors(path: str | Path, vectors: np.ndarray, classes: np.ndarray, blocks: np.ndarray,
-                          metadata: dict, gradient_response: np.ndarray | None = None) -> None:
+                          metadata: dict, response_per_step: np.ndarray | None = None) -> None:
     """Write the vectors (classes, blocks, steps, 2, width), their classes and blocks, and the settings to one .npz.
 
-    gradient_response: (classes, blocks) S of each vector (Eq. 21, `gradient_responses`), stored so that a run
-    started from this file has S without the gradient pass. None stores no S.
+    response_per_step: (classes, blocks, steps) S_C(t_k) of each vector (`gradient_responses_per_step`), stored so
+    that a run started from this file has S, the sum over k (Eq. 21), without the gradient pass. None stores none.
     """
     if vectors.shape[:2] != (len(classes), len(blocks)):
         raise ValueError(f"vectors have shape {vectors.shape}, expected ({len(classes)} classes, {len(blocks)} "
                          f"blocks, steps, 2, width)")
     arrays = {"steering vectors": vectors, "classes": np.asarray(classes), "blocks": np.asarray(blocks),
               "metadata": np.array(json.dumps(metadata, indent=1))}
-    if gradient_response is not None:
-        if np.shape(gradient_response) != vectors.shape[:2]:
-            raise ValueError(f"gradient_response has shape {np.shape(gradient_response)}, expected "
-                             f"{vectors.shape[:2]} (classes, blocks)")
-        arrays[GRADIENT_RESPONSE_KEY] = np.asarray(gradient_response, dtype=np.float64)
+    if response_per_step is not None:
+        if np.shape(response_per_step) != vectors.shape[:3]:
+            raise ValueError(f"response_per_step has shape {np.shape(response_per_step)}, expected "
+                             f"{vectors.shape[:3]} (classes, blocks, steps)")
+        arrays[GRADIENT_RESPONSE_KEY] = np.asarray(response_per_step, dtype=np.float64)
     np.savez(path, **arrays)
 
 
-def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str, block: int) -> float:
-    """Sum over the Euler steps of the gradient response, sum over k of S_C(t_k) (paper Eq. 21).
+def gradient_response_per_step(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str,
+                                block: int) -> np.ndarray:
+    """(steps,) gradient response S_C(t_k) = G_C(t_k)^T xi(t_k) at each Euler step k; the sum over k is S (Eq. 21).
 
-    S_C(t_k) = G_C(t_k)^T xi(t_k), with G_C(t_k) = raw sum[C, block, k] / count[C] the mean of the raw gradients of
-    log m over the pairs of class C. To first order in alpha, the pole moves as M(alpha) = M(0) exp(alpha S), with
-    S this sum. The paper's value for the Z at block 1 is 0.122.
+    G_C(t_k) = raw sum[C, block, k] / count[C] is the mean of the raw gradients of log m over the pairs of class C.
+    To first order in alpha, the pole moves as M(alpha) = M(0) exp(alpha S). The paper's S for the Z at block 1 is
+    0.122.
 
     moments: the sums of gradients.py. xi: (steps, 2, width) steering vector, negative token first, as from
-    `load_steering_vector`; the raw sums hold the two tokens side by side in the same order.
+    `load_steering_vector`; the raw sums hold the two tokens side by side in the same order. A vector of in_time
+    `constant` has the same entries at every step, so it has the steps of the moments too.
     """
     names = [str(name) for name in moments["classes"]]
     blocks = [int(b) for b in moments["blocks"]]
@@ -180,7 +183,12 @@ def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Ten
                          f"{raw_sum.shape[1] // 2}) to match the moments")
     if not (np.isfinite(xi).all() and np.isfinite(raw_sum).all()):
         raise ValueError(f"xi or the raw sum of class {target!r} at block {block} has a non-finite entry")
-    return float(np.einsum("kw,kw->", raw_sum, xi.reshape(len(xi), -1)) / count)
+    return np.einsum("kw,kw->k", raw_sum, xi.reshape(len(xi), -1)) / count
+
+
+def gradient_response(moments: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, target: str, block: int) -> float:
+    """S of Eq. 21: the sum over the Euler steps k of `gradient_response_per_step`."""
+    return float(gradient_response_per_step(moments, xi, target, block).sum())
 
 
 def load_steering_vector(path: str | Path, target: str, block: int) -> torch.Tensor:
@@ -197,14 +205,20 @@ def load_steering_vector(path: str | Path, target: str, block: int) -> torch.Ten
 
 
 
-def gradient_responses(moments: dict[str, np.ndarray], vectors: np.ndarray) -> np.ndarray:
-    """(classes, blocks) S of the vector of each class and block of `steering_vectors(moments, ...)` (Eq. 21)."""
-    return np.array([[gradient_response(moments, vectors[c, b], str(name), int(block))
+def gradient_responses_per_step(moments: dict[str, np.ndarray], vectors: np.ndarray) -> np.ndarray:
+    """(classes, blocks, steps) S_C(t_k) of the vector of each class and block of `steering_vectors(moments, ...)`.
+
+    The sum over the last axis is S of Eq. 21.
+    """
+    return np.array([[gradient_response_per_step(moments, vectors[c, b], str(name), int(block))
                       for b, block in enumerate(moments["blocks"])] for c, name in enumerate(moments["classes"])])
 
 
-def load_gradient_response(path: str | Path, target: str, block: int) -> float | None:
-    """S (Eq. 21) of the vector of class `target` at `block` stored in `path`; None if the file stores no S."""
+def load_gradient_response_per_step(path: str | Path, target: str, block: int) -> np.ndarray | None:
+    """(steps,) S_C(t_k) of the vector of class `target` at `block` stored in `path`; its sum is S (Eq. 21).
+
+    None if the file stores no response: a file written before `steer steering-vectors` stored it.
+    """
     with np.load(path) as data:
         if GRADIENT_RESPONSE_KEY not in data.files:
             return None
@@ -212,7 +226,7 @@ def load_gradient_response(path: str | Path, target: str, block: int) -> float |
         blocks = [int(b) for b in data["blocks"]]
         if target not in names or block not in blocks:
             raise ValueError(f"{path} has no class {target!r} at block {block}; classes {names}, blocks {blocks}")
-        return float(data[GRADIENT_RESPONSE_KEY][names.index(target), blocks.index(block)])
+        return data[GRADIENT_RESPONSE_KEY][names.index(target), blocks.index(block)].astype(np.float64)
 
 
 def check_steering_vectors_file(path: str | Path, *, method: Method, in_time: InTime, balance: Balance,

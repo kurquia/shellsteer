@@ -15,8 +15,7 @@
 #     steer all configs/paper/main_z_block1.yaml --set steering_vectors.from_file=vectors/main_block1.npz \
 #       --set 'steering.alphas=[-3, -2.5, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 3]' \
 #       --set 'steering.seeds=[2041, 2042, 2043]' --set name=main_z_block1_fig5_from_vectors
-# The file stores no gradient response S (Eq. 21), so these runs report S as unavailable and Fig. 5 has no dotted
-# first-order line.
+# The file stores the gradient response per Euler step; its sum is S (Eq. 21), the first-order line of Fig. 5.
 set -euo pipefail
 CONFIG=configs/paper/main_z_block1.yaml
 

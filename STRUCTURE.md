@@ -117,17 +117,30 @@ under "NaN counts" in the metadata of each file the stage writes.
 
 ## Shipped vectors
 
-`vectors/main_block1.npz` is `runs/full_main/steering_vectors.npz` of the full main run on one B200, unchanged (md5
-6283fc6f789a2b8a5d9ce47f9e3c2684), written 2026-11-17 02:08 CET. The command that wrote it, from the repository root:
+`vectors/main_block1.npz` holds the FKT vectors (per step, balance equal) of the classes Z, Jpsi, Upsilon, and rest
+at block 1: 200 Euler steps, 2 muon tokens of width 128, float64. It also holds their gradient response per step,
+whose sum is S (Eq. 21), and the full metadata: steps, class windows, network, and the settings of the gradient pass
+(1,040,000 events of the directions sample, seed 2040, 1,000,000 kept pairs, block 1 only).
+
+The full main run on one B200 made it, from the repository root:
 
     steer all configs/paper/main_z_block1.yaml --set name=full_main --set 'gradients.blocks=[1]'
 
-Its steering-vectors stage wrote the file from a gradient pass of 1,040,000 events of the directions sample, seed
-2040, 1,000,000 kept pairs, block 1 only. The file holds the FKT vectors (per step, balance equal) of the classes Z,
-Jpsi, Upsilon, and rest at block 1: 200 Euler steps, 2 muon tokens of width 128, float64. The code wrote it before the
-vectors file stored S, the network, and the class windows, so its metadata records only the method, in_time, and
-balance. A run from it reports S as unavailable and checks neither the network nor the class windows. Three other runs
-of the same night (the ablation and the two Fig. 5 runs) wrote byte-identical files.
+Its steering-vectors stage wrote `runs/full_main/steering_vectors.npz` (md5 6283fc6f789a2b8a5d9ce47f9e3c2684) on
+2026-11-17. Three other runs of the same night (the ablation and the two Fig. 5 runs) wrote byte-identical files.
+That file records only the method, in_time, and balance. It was then rewritten with the code that stores the
+response per step:
+
+1. `steer steering-vectors` with the command above and `--runs` set to a folder that holds copies of
+   `config.yaml`, `gradient_moments.npz`, and `directions_kept.npz` of `runs/full_main`. This step wrote the
+   metadata.
+2. The `steering vectors`, `classes`, and `blocks` arrays are those of the old file, bit for bit. The recomputed
+   vectors on a 4-core machine differed from them by up to 1e-12, an effect of the BLAS threads. The response per
+   step is `gradient_responses_per_step` of the old vectors in float32, as the edit applies them, and of the
+   moments of `runs/full_main`. Its sum for the Z is 0.12227731427827616, 2.8e-17 below the readout's
+   0.12227731427827619.
+
+The md5 of the rewritten file is 91e41ce66268c3e57525c996b4852576.
 
 ## Rules
 
