@@ -1,0 +1,71 @@
+# Paper App. C: steering of the Z boson at block 1 of ShellFlow-B, as main_z_block1.yaml but for the network, the
+# events (2to4lep), the alphas, and the seeds. ShellGATr: networks_z_shellgatr.yaml. Kept pairs come from this
+# network's own baselines, as in the paper.
+
+name: networks_z_shellflow_b
+network: shellflow_b
+networks: ../networks.yaml          # relative to this file
+datasets: ../datasets.yaml          # relative to this file
+classes: ../classes.yaml            # relative to this file
+target: Z
+
+# Which events, and how many.
+events:
+  dataset: validation_muon_pairs_2to4lep   # 2to4lep validation events (datasets.yaml)
+  directions: 1040000               # events for the gradients and the steering vectors
+  steering: 1040000                 # events we steer and generate
+  keep: 1000000                     # pairs of each sample that enter the classes: lowest priority, with a class
+
+# The Euler sampler that generates the events.
+sampler:
+  steps: 200
+  batch_size: 8192
+  precision: float32
+  on_nan: set_to_zero               # set_to_zero (as the paper) | stop: stop on a NaN; NaNs are counted either way
+
+# Gradients of log m of the pair with respect to the residual stream, on the directions sample.
+gradients:
+  blocks: [0, 1, 2, 3, 4, 5]
+  seed: 2040
+
+# Steering vectors from the class moments of the gradients.
+steering_vectors:
+  method: fkt                       # fkt | fisher | meandiff
+  in_time: per_step                 # per_step | constant
+  balance: equal                    # equal | by_count
+  from_file: null                   # null: from the gradient pass | a steering_vectors.npz, such as
+                                    # vectors/main_block1.npz; then the run has no gradient pass
+
+# The edit h_L -> h_L + alpha xi(t), on the steering sample.
+steering:
+  block: 1
+  alphas: [-3, -2.5, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 3]
+                                    # Fig. 13; Fig. 11 shows -2, -1, +1, +2 (alpha = 0 always runs as the baseline)
+  tokens: pair                      # pair | minus | plus | all_of_type
+  steps: all                        # all | [first, last]
+  norm_restore: false
+  seeds: [2041, 2042, 2043]         # Fig. 13 averages the three; Fig. 11 shows seed 2041
+
+# Histograms and the selectivity metric of the generated spectra (paper Eq. 19).
+readout:
+  spectrum_range: [0.3, 300]        # GeV; bins equally spaced in log m
+  spectrum_bins: 200
+  r60_max_mass: 60                  # GeV; R_60 uses the bins whose centre is below this mass
+  r60_min_baseline_pairs: 20        # R_60 leaves out bins with fewer baseline pairs
+
+# The fit of the Z lineshape (paper App. E), for each seed and alpha.
+lineshape:
+  half_width: 0.25                  # half the width of the fit window in log m
+  bins: 100                         # bins of equal width in log m in the fit window
+  min_window_pairs: 50              # pairs in the Z window needed to centre the fit
+
+# Figures (paper Fig. 11; Fig. 13 comes from python -m shellsteer.compare_runs); labels are matplotlib mathtext.
+plots:
+  zooms:                            # GeV; one zoom panel each, left to right
+    '$J/\psi$': [2.0, 4.5]
+    '$\Upsilon$': [6.0, 14.0]
+    '$Z$': [50, 140]
+  zoom_bins: 100
+  baseline_label: '$\mathtt{ShellFlow\text{-}B}$'
+  pair_label: '\mu\mu'
+  target_label: '$Z$'
