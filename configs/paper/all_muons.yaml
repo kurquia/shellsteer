@@ -1,8 +1,8 @@
 # Paper Figs. 4 and 14 (Sec. 5.1, App. D.1): the Z steering vector of main_z_block1.yaml added to every muon of
-# 1,000,000 validation events of every final state, and the kinematics of every particle type.
-# NOT RUNNABLE YET: the paper steers the all-final-states sample (sample C), which datasets.yaml and
-# events.load_events cannot load today. Until they can, events.dataset names the muon-pair sample, so a run of this
-# config steers the wrong events. The gradients and the steering vectors are those of main_z_block1.yaml.
+# 1,000,000 validation events of every final state (sample C), and the kinematics of every particle type.
+# The gradients and the steering vectors come from the muon-pair sample, as in main_z_block1.yaml; the steering sample
+# has no pairs, so this config runs the kinematics chain: gradients, steering-vectors, generate, kinematics-readout,
+# kinematics-plots.
 
 name: all_muons
 network: shellflow
@@ -13,10 +13,11 @@ target: Z
 
 # Which events, and how many.
 events:
-  dataset: validation_muon_pairs    # the paper: directions from this dataset, steering from sample C
+  dataset: validation_muon_pairs    # the directions sample: gradients and steering vectors
+  steering_dataset: validation_all_final_states   # sample C: the events we steer and generate
   directions: 1040000               # events for the gradients and the steering vectors
-  steering: 1000000                 # sample C: 1,000,000 events of every final state, all steered
-  keep: 1000000                     # sample C has no class selection; every event is generated
+  steering: 1000000                 # sample C: 1,000,000 events of every final state, all generated in file order
+  keep: 1000000                     # pairs of the directions sample that enter the classes; sample C has no classes
 
 # The Euler sampler that generates the events.
 sampler:
@@ -45,27 +46,11 @@ steering:
   norm_restore: false
   seeds: [2041]                     # the paper ran sample C with one seed
 
-# Histograms and the selectivity metric of the generated spectra (paper Eq. 19). Figs. 4 and 14 need a readout of
-# every particle type that does not exist yet; these settings apply to the events with one muon pair.
-readout:
-  spectrum_range: [0.3, 300]        # GeV; bins equally spaced in log m
-  spectrum_bins: 200
-  r60_max_mass: 60                  # GeV; R_60 uses the bins whose centre is below this mass
-  r60_min_baseline_pairs: 20        # R_60 leaves out bins with fewer baseline pairs
-
-# The fit of the Z lineshape (paper App. E), for each seed and alpha. Not in the paper for this sample.
-lineshape:
-  half_width: 0.25                  # half the width of the fit window in log m
-  bins: 100                         # bins of equal width in log m in the fit window
-  min_window_pairs: 50              # pairs in the Z window needed to centre the fit
-
-# Figures; labels are matplotlib mathtext. Figs. 4 and 14 need panels of every particle type (see readout).
-plots:
-  zooms:                            # GeV; one zoom panel each, left to right
-    '$J/\psi$': [2.0, 4.5]
-    '$\Upsilon$': [6.0, 14.0]
-    '$Z$': [50, 140]
-  zoom_bins: 100
+# The kinematics of every particle type (Figs. 4 and 14): counts of p_T, eta, phi, and E for real data, the baseline,
+# and each alpha, and the largest change per bin that Sec. 5.1 and App. D.1 quote.
+kinematics:
+  bins: 60                          # per panel: equal in log for p_T and E, equal in eta and phi
+  readout_min_baseline: 1000        # the largest change per bin counts bins with at least this many baseline particles
+  ratio_min_baseline: 1             # ratio panels: every bin with baseline particles, as the paper
+  other_types_ratio_range: [0.9, 1.1]   # every ratio panel of Fig. 14; Fig. 4 scales each panel to its ratios
   baseline_label: '$\mathtt{ShellFlow}$'
-  pair_label: '\mu\mu'
-  target_label: '$Z$'

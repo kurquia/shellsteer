@@ -1,14 +1,15 @@
 """Command-line runner: `steer <stage> CONFIG [--set key=value]...`, or `steer all CONFIG` for the run of the config.
 
-A config runs one of two chains of stages (STAGES): the steering run (Sec. 5) or, with an `ablation` section, the
-mean ablation (Sec. 5.3). A run writes to <runs>/<config name>/ (STRUCTURE.md, "Outputs"). Each stage reads only the
+A config runs one of three chains of stages (STAGES, `Config.chain`): the steering run (Sec. 5); the kinematics run
+(Figs. 4 and 14), whose steering sample holds events of every final state; or, with an `ablation` section, the mean
+ablation (Sec. 5.3). A run writes to <runs>/<config name>/ (STRUCTURE.md, "Outputs"). Each stage reads only the
 files of the stages it needs and stops, naming the missing file and the stage that writes it, if one is absent. A
 stage refuses to replace its own output unless --overwrite is given, and refuses to run on outputs that were made
 with other settings. The resolved config, overrides applied, goes to config.yaml in the run folder; the log to stdout.
 
 With steering_vectors.from_file, the vectors come from a file of an earlier `steer steering-vectors` (stages_of):
-`steer steering-vectors` checks the file against the config and copies it into the run folder, the steering run
-has no gradients stage, and in the ablation run `steer gradients` makes only the baseline and the kept pairs of the
+`steer steering-vectors` checks the file against the config and copies it into the run folder, the steering and
+kinematics runs have no gradients stage, and in the ablation run `steer gradients` makes only the baseline and the kept pairs of the
 directions sample, which c_k needs. S (Eq. 21) then comes from the file, or the readout reports it as unavailable.
 
 The readouts write JSON: a few numbers per seed, which a person can read and any language can load. The lineshape
@@ -39,16 +40,19 @@ from shellsteer.activation_means import (activation_means, load_activation_means
 from shellsteer.config import Config, load_config
 from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
                                 parse_devices)
-from shellsteer.events import class_names, class_of, load_events, select
+from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, load_events, load_final_states,
+                               select, tokens_of_type)
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
+from shellsteer.kinematics import VARIABLES, largest_changes, load_panels, save_panels, type_masks, type_panels
 from shellsteer.lineshape import LineshapeFit, fit_masses
 from shellsteer.metrics import (below_mass_deviation, log_bin_edges, peak_height_change, pole_response_fit, r60,
                                 selectivity_curve, target_shift, window_log_spread)
-from shellsteer.plots import (ablation_figure, pole_and_width_figure, save, selectivity_figure,
-                              steered_spectrum_figure)
+from shellsteer.plots import (ablation_figure, all_particles_figure, kinematics_figure, pole_and_width_figure, save,
+                              selectivity_figure, steered_spectrum_figure)
 from shellsteer.sampler import NanError
-from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_pairs,
-                                           generated_path, kept_path, load_generated, load_kept, save_generated,
+from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_events,
+                                           generate_pairs, generated_path, kept_path, load_generated,
+                                           load_generated_events, load_kept, save_generated, save_generated_events,
                                            save_kept)
 from shellsteer.steering_vectors import (check_steering_vectors_file, gradient_response,
                                         gradient_responses_per_step, load_gradient_response_per_step,
@@ -66,6 +70,10 @@ GENERATED_DIR = "generated"
 READOUT_FILE = "readout.json"
 PLOTS_DIR = "plots"
 ABLATION_FIGURE_FILE = "plots/ablation.pdf"
+KINEMATICS_FILE = "kinematics.npz"
+KINEMATICS_READOUT_FILE = "kinematics_readout.json"
+KINEMATICS_FIGURE_FILE = "plots/kinematics.pdf"           # paper Fig. 4
+ALL_PARTICLES_FIGURE_FILE = "plots/all_particles.pdf"     # paper Fig. 14
 LINESHAPE_TARGET = "Z"            # the lineshape model of App. E describes the Z only
 
 
@@ -261,15 +269,28 @@ def run_steering_vectors(config: Config, run: Path, devices: Devices) -> None:
 
 
 def run_generate(config: Config, run: Path, devices: Devices) -> None:
-    """Baseline and steered generation of the steering sample (paper Sec. 5, Eq. 8), every seed and alpha."""
+    """Baseline and steered generation of the steering sample (paper Sec. 5, Eq. 8), every seed and alpha.
+
+    A steering sample of pairs keeps the mass and four-momenta of each pair, and the kept pairs of the first seed's
+    baseline. A steering sample of every final state (Fig. 4) keeps every particle of every event and has no kept
+    pairs.
+    """
     stage = "generate"
     alphas = (0.0, *config.steering.alphas)
     # Every output path first: generated_path stops on an alpha whose file name would clash, before any generation.
     paths = {(seed, alpha): generated_path(run, seed, alpha) for seed in config.steering.seeds for alpha in alphas}
     xi = load_steering_vector(require(run / VECTORS_FILE, "steering-vectors"), config.target, config.steering.block)
-    entry = config.datasets[config.events.dataset]
+    entry, edited = config.dataset("steering"), config.dataset("directions").pair
+    pairs = entry.pair is not None
     workers = start_workers(stage, config, devices)
-    events = load_events(entry, "steering", config.events.steering)
+    if pairs:
+        events = load_events(entry, "steering", config.events.steering)
+    else:
+        events = load_final_states(entry, config.events.steering)
+        negative, positive = (mask.sum(1) for mask in tokens_of_type(events.batch, edited))
+        per_event = (negative + positive).bincount()
+        log(stage, f"edited {edited}s per event: " + ", ".join(f"{k}: {int(n):,}" for k, n in enumerate(per_event))
+                   + f"; {int(negative.sum()):,} negative, {int(positive.sum()):,} positive")
     log(stage, f"{len(events):,} events of the steering sample; {config.target} vector at block "
                f"{config.steering.block}; seeds {list(config.steering.seeds)}, alphas {list(alphas)}")
     edit_steps = None if config.steering.steps == "all" else tuple(config.steering.steps)
@@ -277,27 +298,31 @@ def run_generate(config: Config, run: Path, devices: Devices) -> None:
     for seed in config.steering.seeds:
         for alpha in alphas:
             edit = None if alpha == 0 else Edit(xi=xi, alpha=alpha, block=config.steering.block,
-                                                tokens=config.steering.tokens, pair=entry.pair, steps=edit_steps,
+                                                tokens=config.steering.tokens, pair=edited, steps=edit_steps,
                                                 norm_restore=config.steering.norm_restore)
             start = time.perf_counter()
-            generated = generate_pairs(workers, events, edit, seed=seed, **sizes)
+            if pairs:
+                generated = generate_pairs(workers, events, edit, seed=seed, **sizes)
+            else:
+                generated = generate_events(workers.networks[0], events, edit, seed=seed, device=workers.first,
+                                            **sizes)
             seconds = time.perf_counter() - start
             log(stage, f"seed {seed}, alpha {alpha:+g}: {generated.nans.text()}")
-            if seed == config.steering.seeds[0] and alpha == 0:
+            if pairs and seed == config.steering.seeds[0] and alpha == 0:
                 kept = select(generated.mass, events.priority, config.classes, config.events.keep)
                 save_kept(kept_path(run), kept, generated.event, {"seed": seed, "keep": config.events.keep})
                 log(stage, f"kept {config.events.keep:,} pairs on the baseline of seed {seed}: "
                            f"{class_counts(kept, class_names(config.classes))}; wrote {kept_path(run)}")
             path = paths[(seed, alpha)]
-            save_generated(path, generated, {
+            (save_generated if pairs else save_generated_events)(path, generated, {
                 "alpha": alpha, "block": config.steering.block, "target": config.target,
                 "method": config.steering_vectors.method, "seed": seed, "steps": config.sampler.steps,
                 "edited steps": None if edit_steps is None else list(edit_steps), "tokens": config.steering.tokens,
                 "norm_restore": config.steering.norm_restore, "steering vector file": VECTORS_FILE,
                 "batch_size": config.sampler.batch_size, "device": devices_metadata(devices),
                 "network": config.networks[config.network].model_dump(), "dataset": entry.model_dump()})
-            log(stage, f"seed {seed}, alpha {alpha:+g}: {len(generated.mass):,} pairs in {seconds:.1f} s; "
-                       f"wrote {path}")
+            log(stage, f"seed {seed}, alpha {alpha:+g}: {len(generated.event):,} {'pairs' if pairs else 'events'} "
+                       f"in {seconds:.1f} s; wrote {path}")
 
 
 def fit_summary(fit: LineshapeFit) -> dict[str, Any]:
@@ -414,7 +439,7 @@ def real_masses(config: Config, sample: Literal["directions", "steering"], event
                 rerun: str) -> np.ndarray:
     """(E,) m_real of the events of `sample`, in the order of `event`, the events of `kept_file`. Stops if the
     sample holds other events; `rerun` names the stage that wrote `kept_file`."""
-    events = load_events(config.datasets[config.events.dataset], sample, getattr(config.events, sample))
+    events = load_events(config.dataset(sample), sample, getattr(config.events, sample))
     if not np.array_equal(events.event, event):
         raise StageError(f"the {sample} sample holds other events than {kept_file}; rerun `steer {rerun} "
                          f"--overwrite`")
@@ -509,7 +534,7 @@ def run_ablate(config: Config, run: Path, devices: Devices) -> None:
     c = mean_projection(means, xi, ablation.block)
     log(stage, f"c_k from {int(np.sum(means['count'])):,} pairs: {c.min():+.4f} to {c.max():+.4f} over "
                f"{len(c)} steps")
-    entry = config.datasets[config.events.dataset]
+    entry = config.dataset(ablation.sample)
     events = load_events(entry, ablation.sample, getattr(config.events, ablation.sample))
     if ablation.sample == "directions":
         kept_file = require(run / DIRECTIONS_KEPT_FILE, "gradients")
@@ -639,10 +664,96 @@ def run_ablation_plots(config: Config, run: Path, devices: Devices) -> None:
     log(stage, f"wrote {run / ABLATION_FIGURE_FILE}")
 
 
+def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
+    """Counts of p_T, eta, phi, and E of every particle type for real data, the baseline, and each alpha (Figs. 4 and
+    14), and the largest change per bin that Sec. 5.1 and App. D.1 quote."""
+    stage = "kinematics-readout"
+    seed, alphas = config.steering.seeds[0], [0.0, *config.steering.alphas]
+    paths = {alpha: require(generated_path(run, seed, alpha), "generate") for alpha in alphas}
+    real = load_final_states(config.dataset("steering"), config.events.steering)
+    generated = {alpha: load_generated_events(path)[0] for alpha, path in paths.items()}
+    particle_type, particle_mask = real.batch["particle_type"].numpy(), real.batch["particle_mask"].numpy() > 0.5
+    for alpha, events in generated.items():
+        if not (np.array_equal(events.event, real.event) and np.array_equal(events.particle_type, particle_type)
+                and np.array_equal(events.particle_mask, particle_mask)):
+            raise StageError(f"{paths[alpha]} holds other events or particles than the steering sample; rerun "
+                             f"`steer generate --overwrite`")
+    masks = type_masks(particle_type, particle_mask, list(PARTICLE_TYPES))
+    edited = config.dataset("directions").pair
+    if not masks[PAIR_TYPES[edited]].any():
+        raise StageError(f"the steering sample has no {edited}, so the edit changes nothing and Fig. 4 has no panel")
+    absent = [PARTICLE_TYPES[code] for code, mask in masks.items() if not mask.any()]
+    if absent:
+        log(stage, f"no {', '.join(absent)} in the {len(real):,} events: left out of the counts and the figures")
+    masks = {code: mask for code, mask in masks.items() if mask.any()}
+    kinematics = config.kinematics
+    panels = type_panels(real.p4, generated.pop(0.0).four_momenta,
+                         {alpha: events.four_momenta for alpha, events in generated.items()}, masks,
+                         bins=kinematics.bins)
+    particles = {PARTICLE_TYPES[code]: {"particles": int(mask.sum()), "events": int(mask.any(1).sum())}
+                 for code, mask in masks.items()} | {name: {"particles": 0, "events": 0} for name in absent}
+    save_panels(run / KINEMATICS_FILE, panels, {"seed": seed, "alphas": alphas, "bins": kinematics.bins,
+                                                "particle types": {str(c): n for c, n in PARTICLE_TYPES.items()},
+                                                "particles": particles})
+    log(stage, f"wrote {run / KINEMATICS_FILE}")
+
+    minimum = kinematics.readout_min_baseline
+    changes = {PARTICLE_TYPES[code]: {variable: {f"{alpha:+g}": change for alpha, change in
+                                                 largest_changes(variable, panels[code][variable], minimum).items()}
+                                      for variable in VARIABLES} for code in masks}
+    others = {}
+    for alpha in config.steering.alphas:
+        found = [(change["largest change"], name, variable, change["bin centre"])
+                 for name, by_variable in changes.items() if name != edited
+                 for variable, by_alpha in by_variable.items() if (change := by_alpha[f"{alpha:+g}"]) is not None]
+        largest = max(found) if found else None
+        others[f"{alpha:+g}"] = None if largest is None else dict(zip(
+            ("largest change", "particle type", "variable", "bin centre"), largest))
+    result = {"seed": seed, "alphas": alphas, "bins": kinematics.bins, "edited type": edited,
+              "min baseline particles in a bin": minimum, "particles": particles,
+              "largest change per bin": changes, f"largest change per bin of the types other than the {edited}": others}
+    (run / KINEMATICS_READOUT_FILE).write_text(json.dumps(result, indent=1) + "\n")
+    for variable in ("pt", "eta", "phi"):
+        parts = [f"alpha {key}: " + ("no bin" if change is None else
+                                     f"{change['largest change']:.4f} at {change['bin centre']:.3g}")
+                 for key, change in changes[edited][variable].items()]
+        log(stage, f"{edited} {variable}, largest |steered / baseline - 1| in bins with >= {minimum:,} baseline "
+                   f"particles: " + "; ".join(parts))
+    for key, change in others.items():
+        log(stage, f"alpha {key}, every type but the {edited}: " + ("no bin" if change is None else
+            f"{change['largest change']:.4f} ({change['particle type']} {change['variable']} at "
+            f"{change['bin centre']:.3g})"))
+    log(stage, f"wrote {run / KINEMATICS_READOUT_FILE}")
+
+
+def run_kinematics_plots(config: Config, run: Path, devices: Devices) -> None:
+    """Fig. 4, the edited type's p_T, eta, and phi, and Fig. 14, every other type, from the counts of
+    kinematics-readout."""
+    stage = "kinematics-plots"
+    panels, _ = load_panels(require(run / KINEMATICS_FILE, "kinematics-readout"))
+    kinematics, edited = config.kinematics, PAIR_TYPES[config.dataset("directions").pair]
+    figures = {
+        KINEMATICS_FIGURE_FILE: kinematics_figure(panels[edited], particle=edited,
+                                                  baseline_label=kinematics.baseline_label,
+                                                  ratio_min_baseline=kinematics.ratio_min_baseline),
+        ALL_PARTICLES_FIGURE_FILE: all_particles_figure(
+            {code: panels[code] for code in PARTICLE_TYPES if code != edited and code in panels},
+            baseline_label=kinematics.baseline_label, ratio_min_baseline=kinematics.ratio_min_baseline,
+            ratio_range=tuple(kinematics.other_types_ratio_range))}
+    (run / PLOTS_DIR).mkdir()
+    for name, figure in figures.items():
+        save(figure, run / name)
+        log(stage, f"wrote {run / name}")
+
+
+Chain = Literal["steering", "kinematics", "ablation"]
+CHAINS: tuple[Chain, ...] = ("steering", "kinematics", "ablation")
+
+
 @dataclass(frozen=True)
 class Stage:
     name: str
-    chain: Literal["both", "steering", "ablation"]   # the run the stage belongs to
+    chains: tuple[Chain, ...]          # the runs the stage belongs to
     needs: tuple[str, ...]             # stages whose outputs this stage reads
     outputs: tuple[str, ...]           # paths in the run folder that the stage writes
     sections: tuple[str, ...]          # config keys, dotted, that the stage reads beyond those of the stages it needs
@@ -652,52 +763,56 @@ class Stage:
 
 
 STAGES = (
-    Stage("gradients", "both", (), (MOMENTS_FILE, DIRECTIONS_KEPT_FILE),
+    Stage("gradients", CHAINS, (), (MOMENTS_FILE, DIRECTIONS_KEPT_FILE),
           ("network", "networks", "datasets", "classes", "events", "sampler", "gradients"), True, run_gradients,
           "gradient pass on the directions sample, per-class sums, kept pairs (Sec. 4.1); GPU"),
-    Stage("steering-vectors", "both", ("gradients",), (VECTORS_FILE,), ("target", "steering_vectors"), False,
+    Stage("steering-vectors", CHAINS, ("gradients",), (VECTORS_FILE,), ("target", "steering_vectors"), False,
           run_steering_vectors, "steering vectors of every class and block from the sums (Sec. 4.2); CPU, seconds"),
-    Stage("generate", "steering", ("steering-vectors",), (GENERATED_DIR,), ("steering",), True, run_generate,
-          "baseline and steered generation of the steering sample, every seed and alpha (Sec. 5); GPU"),
-    Stage("readout", "steering", ("generate",), (READOUT_FILE,), ("readout", "lineshape"), False, run_readout,
+    Stage("generate", ("steering", "kinematics"), ("steering-vectors",), (GENERATED_DIR,), ("steering",), True,
+          run_generate, "baseline and steered generation of the steering sample, every seed and alpha (Sec. 5); GPU"),
+    Stage("readout", ("steering",), ("generate",), (READOUT_FILE,), ("readout", "lineshape"), False, run_readout,
           "R_60, target shift, selectivity curve, response fits; lineshape fit only for target Z (App. E); CPU"),
-    Stage("plots", "steering", ("readout",), (PLOTS_DIR,), ("plots",), False, run_plots,
+    Stage("plots", ("steering",), ("readout",), (PLOTS_DIR,), ("plots",), False, run_plots,
           "steered spectrum, selectivity curve, pole and width (Z only) as PDF; CPU"),
-    Stage("activation-means", "ablation", ("gradients",), (MEANS_FILE,), ("ablation.block",), True,
+    Stage("activation-means", ("ablation",), ("gradients",), (MEANS_FILE,), ("ablation.block",), True,
           run_activation_means, "mean residual stream of the kept pairs of the directions sample, for c_k "
                                 "(Eq. 25); GPU"),
-    Stage("ablate", "ablation", ("steering-vectors", "activation-means"), (ABLATED_DIR,),
+    Stage("ablate", ("ablation",), ("steering-vectors", "activation-means"), (ABLATED_DIR,),
           ("ablation.sample", "ablation.seeds"), True, run_ablate,
           "baseline and mean-ablated generation (Eq. 24) of ablation.sample, every seed (Sec. 5.3); GPU"),
-    Stage("ablation-readout", "ablation", ("ablate",), (ABLATION_READOUT_FILE,),
+    Stage("ablation-readout", ("ablation",), ("ablate",), (ABLATION_READOUT_FILE,),
           ("readout", "ablation.peak_range", "ablation.peak_bins"), False, run_ablation_readout,
           "spread and height of the target peak and the deviation below 60 GeV under the ablation (Sec. 5.3); CPU"),
-    Stage("ablation-plots", "ablation", ("ablation-readout",), (PLOTS_DIR,), ("ablation.figure",), False,
+    Stage("ablation-plots", ("ablation",), ("ablation-readout",), (PLOTS_DIR,), ("ablation.figure",), False,
           run_ablation_plots, "spectrum of the baseline, the mean ablation, and real data (Fig. 7) as PDF; CPU"),
+    Stage("kinematics-readout", ("kinematics",), ("generate",), (KINEMATICS_FILE, KINEMATICS_READOUT_FILE),
+          ("kinematics.bins", "kinematics.readout_min_baseline"), False, run_kinematics_readout,
+          "counts of p_T, eta, phi, and E of every particle type, largest change per bin (Figs. 4 and 14); CPU"),
+    Stage("kinematics-plots", ("kinematics",), ("kinematics-readout",), (PLOTS_DIR,),
+          ("kinematics.ratio_min_baseline", "kinematics.other_types_ratio_range", "kinematics.baseline_label"),
+          False, run_kinematics_plots, "kinematics of the edited type (Fig. 4) and of every other type (Fig. 14) as "
+                                       "PDF; CPU"),
 )
 STAGE_NAMES = [stage.name for stage in STAGES]
 BY_NAME = {stage.name: stage for stage in STAGES}
 
 
-def chain_of(config: Config) -> str:
-    return "steering" if config.ablation is None else "ablation"
-
-
 def stages_of(config: Config) -> tuple[Stage, ...]:
-    """The stages of the config's run, in order.
+    """The stages of the config's run (`Config.chain`), in order.
 
     With steering_vectors.from_file, steering-vectors needs no earlier stage and takes over the config keys of the
-    gradients stage (network, events, sampler, ...), which the later stages rely on. The steering run then has no
-    gradients stage. The ablation run keeps it, writing only directions_kept.npz: c_k needs those kept pairs.
+    gradients stage (network, events, sampler, ...), which the later stages rely on. The steering and kinematics runs
+    then have no gradients stage. The ablation run keeps it, writing only directions_kept.npz: c_k needs those kept
+    pairs.
     """
-    chain = [s for s in STAGES if s.chain in ("both", chain_of(config))]
+    chain = [s for s in STAGES if config.chain in s.chains]
     if config.steering_vectors.from_file is None:
         return tuple(chain)
     gradients = BY_NAME["gradients"]
     adjusted = []
     for stage in chain:
         if stage.name == "gradients":
-            if chain_of(config) == "steering":
+            if config.chain != "ablation":
                 continue
             stage = replace(stage, outputs=(DIRECTIONS_KEPT_FILE,),
                             help="baseline and kept pairs of the directions sample, no gradient pass "
@@ -716,12 +831,12 @@ def stage_of(name: str, config: Config) -> Stage:
     if name in stages:
         return stages[name]
     stage = BY_NAME[name]
-    if stage.chain in ("both", chain_of(config)):            # only gradients, left out by steering_vectors.from_file
+    if config.chain in stage.chains:                         # only gradients, left out by steering_vectors.from_file
         raise StageError(f"`steer {name}`: config {config.name} takes its vectors from steering_vectors.from_file "
-                         f"{config.steering_vectors.from_file}, so the steering run has no gradient pass; set "
+                         f"{config.steering_vectors.from_file}, so the {config.chain} run has no gradient pass; set "
                          f"steering_vectors.from_file=null to run it")
-    raise StageError(f"`steer {name}` is a stage of the {stage.chain} run; config {config.name} runs the "
-                     f"{chain_of(config)} stages {', '.join(s.name for s in stages_of(config))}")
+    raise StageError(f"`steer {name}` is a stage of the {' and '.join(stage.chains)} runs; config {config.name} runs "
+                     f"the {config.chain} stages {', '.join(s.name for s in stages_of(config))}")
 
 
 def ancestors(stage: Stage, stages: tuple[Stage, ...] = STAGES) -> list[Stage]:
@@ -806,10 +921,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="steer", description="Run the stages of a steering run or of a mean ablation (STRUCTURE.md); outputs go "
                                   "to RUNS/<name>/.")
     commands = parser.add_subparsers(dest="stage", required=True, metavar="STAGE")
-    chains = {chain: ", ".join(s.name for s in STAGES if s.chain in ("both", chain)) for chain in ("steering",
-                                                                                                    "ablation")}
+    chains = {chain: ", ".join(s.name for s in STAGES if chain in s.chains) for chain in CHAINS}
     every = (f"every stage of the config's run in order: {chains['steering']} for a steering run; "
-             f"{chains['ablation']} for a config with an ablation section")
+             f"{chains['kinematics']} for a steering sample of every final state; {chains['ablation']} for a config "
+             f"with an ablation section")
     for name, text, gpu in [*((s.name, s.help, s.gpu) for s in STAGES), ("all", every, True)]:
         command = commands.add_parser(name, help=text, description=text)
         command.add_argument("config", metavar="CONFIG", help="run config, such as configs/paper/main_z_block1.yaml")
