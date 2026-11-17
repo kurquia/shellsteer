@@ -46,32 +46,39 @@ class NanCounts:
     """The NaN counts of one pass over a sample, per event in file order. `metadata()` goes into the files it writes.
 
     counts: (E, 3) int64, per event the NaN coordinates of the final state, the NaN entries of the four-momenta, and
-    1 if the mass of the pair is NaN, else 0.
+    1 if the mass of the pair is NaN, else 0. Events without a pair, as in paper Fig. 4, have (E, 2): no pair mass.
     """
     on_nan: OnNan
     event: np.ndarray               # (E,) index of the event in the combined dataset
     counts: np.ndarray
 
     @staticmethod
-    def of_batch(generated: Generated, mass: torch.Tensor) -> np.ndarray:
-        """(B, 3) counts of one batch, with `mass` the (B,) pair mass computed from `generated.four_momenta`."""
-        return torch.stack([generated.nan_state, generated.nan_four_momenta, mass.isnan().long()], 1).cpu().numpy()
+    def of_batch(generated: Generated, mass: torch.Tensor | None) -> np.ndarray:
+        """(B, 3) counts of one batch, with `mass` the (B,) pair mass computed from `generated.four_momenta`, or (B, 2)
+        for mass None, events without a pair."""
+        columns = [generated.nan_state, generated.nan_four_momenta]
+        if mass is not None:
+            columns.append(mass.isnan().long())
+        return torch.stack(columns, 1).cpu().numpy()
 
     def metadata(self) -> dict:
-        state, four, mass = self.counts.T
-        return {"sampler.on_nan": self.on_nan, "events": len(self.event),
-                "NaN coordinates of the final state": int(state.sum()),
-                "events with NaN in the final state": self.event[state > 0].tolist(),
-                "NaN entries of the four-momenta": int(four.sum()),
-                "events with NaN in the four-momenta": self.event[four > 0].tolist(),
-                "NaN pair masses": int(mass.sum()), "events with NaN pair mass": self.event[mass > 0].tolist()}
+        state, four = self.counts[:, 0], self.counts[:, 1]
+        metadata = {"sampler.on_nan": self.on_nan, "events": len(self.event),
+                    "NaN coordinates of the final state": int(state.sum()),
+                    "events with NaN in the final state": self.event[state > 0].tolist(),
+                    "NaN entries of the four-momenta": int(four.sum()),
+                    "events with NaN in the four-momenta": self.event[four > 0].tolist()}
+        if self.counts.shape[1] == 3:
+            mass = self.counts[:, 2]
+            metadata |= {"NaN pair masses": int(mass.sum()), "events with NaN pair mass": self.event[mass > 0].tolist()}
+        return metadata
 
     def text(self) -> str:
         """One line for the log."""
-        state, four, mass = self.counts.T
-        return (f"NaN: {int(state.sum()):,} final-state coordinates in {int((state > 0).sum()):,} events (set to 0), "
-                f"{int(four.sum()):,} four-momentum entries in {int((four > 0).sum()):,} events, {int(mass.sum()):,} "
-                f"pair masses")
+        state, four = self.counts[:, 0], self.counts[:, 1]
+        line = (f"NaN: {int(state.sum()):,} final-state coordinates in {int((state > 0).sum()):,} events (set to 0), "
+                f"{int(four.sum()):,} four-momentum entries in {int((four > 0).sum()):,} events")
+        return line + (f", {int(self.counts[:, 2].sum()):,} pair masses" if self.counts.shape[1] == 3 else "")
 
 
 def batch_seed(seed: int, index: int) -> int:

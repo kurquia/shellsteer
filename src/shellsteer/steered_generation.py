@@ -14,6 +14,11 @@ seed and alpha. Each generation is one file:
     <run>/generated/seed_<seed>/alpha_<alpha:+g>.npz    from generated_path(run, seed, alpha); the baseline is alpha_+0
     <run>/generated/kept.npz                            from kept_path(run): the class of each kept pair
 
+A steering sample of every final state (paper Fig. 4) has no pairs and no class selection. `generate_events` edits
+every particle of the edited type (tokens all_of_type) and keeps the four-momenta, types, charges, and mask of every
+particle of every event. `save_generated_events` writes them to the same generated_path, one file per seed and alpha;
+there is no kept.npz.
+
 The mean ablation (paper Sec. 5.3) is the edit `Ablation`; its c_k come from `activation_means.mean_projection`.
 It runs on the sample of the config's `ablation.sample` (the directions sample in the paper), so its baseline is
 generated again for that sample and each seed:
@@ -32,7 +37,8 @@ from typing import Literal
 import numpy as np
 import torch
 
-from shellsteer.events import Events, batches, edited_tokens, pair_mass
+from shellsteer.events import (Events, FinalStates, batches, edited_tokens, final_state_batches, pair_mass,
+                               tokens_of_type)
 from shellsteer.hooks import Ablate, Steer, attach, on_step
 from shellsteer.networks import Network
 from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
@@ -52,7 +58,7 @@ class Edit:
     alpha: float
     block: int                                               # the edit acts on the output of this block
     tokens: Literal["pair", "minus", "plus", "all_of_type"]  # the edited tokens, see events.edited_tokens
-    pair: Literal["muon", "electron", "tau"]                 # particle type of the pair, from the dataset entry
+    pair: Literal["muon", "electron", "tau"]                 # the edited type: the pair type of the directions sample
     steps: tuple[int, int] | None                            # edit at Euler steps first..last only; None: every step
     norm_restore: bool                                       # rescale each edited token to its norm before the edit
 
@@ -72,6 +78,17 @@ class GeneratedPairs:
     event: np.ndarray         # (E,) index of the event in the combined dataset
     nans: NanCounts | None = None   # the NaN counts of the generation; None for pairs read from a file, whose
                                     # metadata holds them under "NaN counts"
+
+
+@dataclass(frozen=True)
+class GeneratedEvents:
+    """Every particle of every event of a sample without pairs (paper Fig. 4), in file order."""
+    four_momenta: np.ndarray     # (E, N, 4) float32 four-momenta (px, py, pz, E) in GeV, zero on padding
+    particle_type: np.ndarray    # (E, N) int16 ShellFlow type code of each slot, as in the dataset
+    particle_charge: np.ndarray  # (E, N) int16 charge + 1 of each slot
+    particle_mask: np.ndarray    # (E, N) bool, True on real particles
+    event: np.ndarray            # (E,) index of the event in the combined dataset
+    nans: NanCounts | None = None   # as in GeneratedPairs, without the pair-mass column
 
 
 def check_edit(edit: Edit | Ablation, steps: int, width: int) -> None:
@@ -128,6 +145,40 @@ def generate_pairs(network: Network, events: Events, edit: Edit | Ablation | Non
                           nans=NanCounts(on_nan, events.event, np.concatenate(nans)))
 
 
+def generate_events(network: Network, events: FinalStates, edit: Edit | None, *, steps: int, batch_size: int,
+                    seed: int, device: str | torch.device, on_nan: OnNan = "set_to_zero") -> GeneratedEvents:
+    """Generate every event of a sample without pairs with `edit`, or without edits for edit=None (paper Fig. 4).
+
+    The edit adds alpha xi^- to every negative and alpha xi^+ to every positive particle of type `edit.pair`, so it
+    needs tokens all_of_type; an event without such a particle is generated as without the edit. Batch i starts from
+    the noise of batch_seed(seed, i), as in `generate_pairs`.
+    """
+    if edit is not None:
+        if not isinstance(edit, Edit) or edit.tokens != "all_of_type":
+            raise ValueError(f"edit: events without pairs take only a steering edit with tokens all_of_type, got "
+                             f"{getattr(edit, 'tokens', type(edit).__name__)!r}")
+        check_edit(edit, steps, network.model.d_model)
+        edit = replace(edit, xi=edit.xi.to(device))
+    four_momenta, nans = [], []
+    for index, batch in final_state_batches(events, batch_size, device):
+        state = prior(network, batch, batch_seed(seed, index))
+        settings = dict(on_nan=on_nan, label=f"batch {index} of seed {seed}")
+        if edit is None:
+            generated = generate(network, batch, state, steps, **settings)
+        else:
+            hook = Steer(edit.xi, edit.alpha, *tokens_of_type(batch, edit.pair), steps=edit.steps,
+                         norm_restore=edit.norm_restore)
+            with attach(network, edit.block, hook):
+                generated = generate(network, batch, state, steps, on_step=on_step(hook), **settings)
+        four_momenta.append(generated.four_momenta.cpu().numpy())
+        nans.append(NanCounts.of_batch(generated, None))
+    return GeneratedEvents(four_momenta=np.concatenate(four_momenta),
+                           particle_type=events.batch["particle_type"].numpy().astype(np.int16),
+                           particle_charge=events.batch["particle_charge"].numpy().astype(np.int16),
+                           particle_mask=events.batch["particle_mask"].numpy() > 0.5, event=events.event,
+                           nans=NanCounts(on_nan, events.event, np.concatenate(nans)))
+
+
 def generated_path(run: str | Path, seed: int, alpha: float) -> Path:
     """<run>/generated/seed_<seed>/alpha_<alpha:+g>.npz, for example alpha_-1.5.npz; the baseline is alpha_+0.npz.
 
@@ -171,7 +222,37 @@ def save_generated(path: str | Path, generated: GeneratedPairs, metadata: dict,
 
 def load_generated(path: str | Path) -> tuple[GeneratedPairs, dict]:
     with np.load(path) as data:
+        if "mass" not in data.files:
+            raise ValueError(f"{path} holds every particle of each event, not pairs; read it with "
+                             f"load_generated_events")
         generated = GeneratedPairs(mass=data["mass"], four_momenta=data["four-momenta"], event=data["event"])
+        metadata = json.loads(str(data["metadata"]))
+    return generated, metadata
+
+
+def save_generated_events(path: str | Path, generated: GeneratedEvents, metadata: dict) -> None:
+    """Write every particle of `generated` and the settings that made it to one .npz, as `save_generated` does for
+    pairs; metadata must hold every key of METADATA_KEYS."""
+    missing = [key for key in METADATA_KEYS if key not in metadata]
+    if missing:
+        raise ValueError(f"metadata has no {missing}")
+    if generated.nans is not None:
+        metadata = {**metadata, "NaN counts": generated.nans.metadata()}
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(path, **{"four-momenta": generated.four_momenta, "particle_type": generated.particle_type,
+                      "particle_charge": generated.particle_charge, "particle_mask": generated.particle_mask,
+                      "event": generated.event, "metadata": np.array(json.dumps(metadata, indent=1))})
+
+
+def load_generated_events(path: str | Path) -> tuple[GeneratedEvents, dict]:
+    """The particles and the settings from `save_generated_events`; stops on a file of pairs."""
+    with np.load(path) as data:
+        if "particle_type" not in data.files:
+            raise ValueError(f"{path} holds pairs, not every particle of each event; read it with load_generated")
+        generated = GeneratedEvents(four_momenta=data["four-momenta"], particle_type=data["particle_type"],
+                                    particle_charge=data["particle_charge"], particle_mask=data["particle_mask"],
+                                    event=data["event"])
         metadata = json.loads(str(data["metadata"]))
     return generated, metadata
 
