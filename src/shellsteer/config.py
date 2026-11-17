@@ -78,13 +78,23 @@ class Steering(Section):
     seeds: list[int]
 
 
+class AblationFigure(Section):
+    """Settings of paper Fig. 7 that the readout does not use."""
+    inset_range: list[float]         # GeV: the mass range the inset shows, inside peak_range
+    ratio_range: list[float]         # y range of the ratio panel, linear
+    baseline_label: str
+    pair_label: str
+    target_label: str
+
+
 class Ablation(Section):
     """The mean ablation of paper Sec. 5.3: the target's steering vector at `block`, c_k from the directions sample."""
     block: int
     sample: Literal["directions", "steering"]
     seeds: list[int]
-    peak_range: list[float]          # GeV: the histogram of the peak height, the Z zoom of paper Fig. 7
+    peak_range: list[float]          # GeV: the histogram of the peak height, and the bins of the inset of paper Fig. 7
     peak_bins: int
+    figure: AblationFigure
 
 
 class Readout(Section):
@@ -174,6 +184,12 @@ class Config(Section):
             if len(peak) != 2 or not 0 < peak[0] < peak[1] or self.ablation.peak_bins < 1:
                 raise ValueError(f"ablation.peak_range, peak_bins: need [low, high] with 0 < low < high and at least "
                                  f"1 bin, got {peak} and {self.ablation.peak_bins}")
+            inset, ratio = self.ablation.figure.inset_range, self.ablation.figure.ratio_range
+            if len(inset) != 2 or not peak[0] <= inset[0] < inset[1] <= peak[1]:
+                raise ValueError(f"ablation.figure.inset_range: need [low, high] with low < high inside "
+                                 f"ablation.peak_range {peak}, got {inset}")
+            if len(ratio) != 2 or not 0 <= ratio[0] < ratio[1]:
+                raise ValueError(f"ablation.figure.ratio_range: need [low, high] with 0 <= low < high, got {ratio}")
         # The checks below guard settings that the run reads only after the generation.
         spectrum = self.readout.spectrum_range
         if len(spectrum) != 2 or not 0 < spectrum[0] < spectrum[1]:

@@ -9,8 +9,9 @@ particle:
     steering:   the events we steer and generate.
 
 Both come from Hugging Face at a pinned revision. Each file holds the conditioning (BATCH_KEYS), `event` (the index
-of the event in the combined dataset), and `priority` (its position in a seeded random order of the events). The
-events are stored in the order the paper ran them, so the batches and their noise seeds match the paper's runs.
+of the event in the combined dataset), `priority` (its position in a seeded random order of the events), and `m_real`
+(the real-data mass of the pair in GeV, float32, the grey line of paper Figs. 3 and 7). The events are stored in the
+order the paper ran them, so the batches and their noise seeds match the paper's runs.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class Events:
     plus: torch.Tensor               # (E,) slot of the positive particle of the pair
     event: np.ndarray                # (E,) index of the event in the combined dataset
     priority: np.ndarray             # (E,) position of the event in the seeded random order
+    m_real: np.ndarray               # (E,) float32 real-data mass of the pair in GeV, as stored
 
     def __len__(self) -> int:
         return len(self.event)
@@ -53,7 +55,7 @@ def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], 
     path = hf_hub_download(entry.hf_repo, getattr(entry.files, sample), revision=entry.revision,
                            repo_type="dataset")
     with np.load(path) as data:
-        missing = {*BATCH_KEYS, "event", "priority"} - set(data.files)
+        missing = {*BATCH_KEYS, "event", "priority", "m_real"} - set(data.files)
         if missing:
             raise ValueError(f"{path} has no {sorted(missing)}")
         size = len(data["event"])
@@ -63,11 +65,13 @@ def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], 
             raise ValueError(f"{path} has {size} events, the config asks for {n}")
         keep = np.sort(np.argsort(data["priority"], kind="stable")[:n])
         batch = {key: torch.from_numpy(data[key][keep]) for key in BATCH_KEYS}
-        event, priority = data["event"][keep], data["priority"][keep]
+        event, priority, m_real = data["event"][keep], data["priority"][keep], data["m_real"][keep]
+    if m_real.dtype != np.float32:
+        raise ValueError(f"{path}: m_real is {m_real.dtype}, expected float32")
     batch["particle_type"] = batch["particle_type"].long()       # stored as int16
     batch["particle_charge"] = batch["particle_charge"].long()
     minus, plus = pair_slots(batch, entry.pair)
-    return Events(batch=batch, minus=minus, plus=plus, event=event, priority=priority)
+    return Events(batch=batch, minus=minus, plus=plus, event=event, priority=priority, m_real=m_real)
 
 
 def pair_slots(batch: dict[str, torch.Tensor], pair: str) -> tuple[torch.Tensor, torch.Tensor]:

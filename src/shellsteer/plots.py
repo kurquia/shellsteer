@@ -3,6 +3,8 @@
 steered_spectrum_figure  Fig. 3: baseline, each alpha, and real data on log axes, the ratio below, and zooms.
 selectivity_figure       R_60 against the target shift, one curve per method (numbers in App. B; no paper figure).
 pole_and_width_figure    Fig. 5: fitted pole M and width Gamma of the target against alpha, with the prediction.
+ablation_figure          Fig. 7: baseline, mean ablation, and real data on log axes, an inset of the target peak, the
+                         ratio below.
 save                     writes a figure as PDF.
 
 Each function returns a Figure drawn at the printed width of the paper, in the style of paper.mplstyle, which applies
@@ -18,7 +20,8 @@ from matplotlib import colormaps, style
 from matplotlib.axes import Axes
 from matplotlib.colors import to_hex
 from matplotlib.figure import Figure
-from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+from matplotlib.patches import ConnectionPatch, Rectangle
+from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator, NullFormatter
 from numpy.typing import ArrayLike
 
 STYLE_FILE = Path(__file__).with_name("paper.mplstyle")
@@ -45,6 +48,16 @@ PREDICTION_COLOR = "0.55"
 CURVE_COLORS = ("darkred", "#1f4e9c", "#e69f00", "#26ad81", "#43a2ca")
 
 SELECTIVITY_KEYS = ("alpha", "target shift", "target shift std", "R_60", "R_60 std")
+
+ABLATION_COLOR = to_hex(colormaps[ALPHA_COLORMAP](0.0))   # the blue end of the alpha colours
+ABLATION_LABEL = "Ablation"
+ABLATION_HEIGHT = COLUMN_WIDTH * 0.78 * 1.175              # inches, Fig. 7 before cropping
+INSET_POSITION = (0.40, 0.16, 0.33, 0.27)                  # left, bottom, width, height in the spectrum's axes
+INSET_FONT_SIZE = 5.5                                      # tick labels and x label of the inset
+INSET_TARGET_SIZE = 7                                      # the target's name inside the inset
+RATIO_LABEL_SIZE = 6                                       # the two-line y label of the ratio panel of Fig. 7
+LEGEND_ROOM = 0.24                                         # top of the log y axis of Fig. 7 left free for the legend
+BOX_COLOR = "0.3"                                          # the box around the inset's range and its two lines
 
 
 # ---------------------------------------------------------------- checks of the inputs
@@ -410,4 +423,121 @@ def pole_and_width_figure(alpha: ArrayLike, pole: ArrayLike, pole_std: ArrayLike
         figure.align_ylabels((pole_panel, width_panel))
         figure.tight_layout()
         fit_to_width(figure, POLE_AND_WIDTH_WIDTH)
+    return figure
+
+
+# ---------------------------------------------------------------- Fig. 7: the mean ablation
+
+def as_seeds(masses: list[ArrayLike], name: str) -> list[np.ndarray]:
+    """1-D float64 copies of the masses of each seed; stops on an empty list."""
+    if not masses:
+        raise ValueError(f"{name}: expected the masses of at least one seed, got none")
+    return [as_masses(m, f"{name}[{index}]") for index, m in enumerate(masses)]
+
+
+def draw_ablation(axes: Axes, edges: np.ndarray, baseline: np.ndarray, ablated: np.ndarray,
+                  real_data: np.ndarray | None, baseline_label: str | None) -> None:
+    """Step histograms of counts per bin: real data grey at the back, the ablation solid, and the baseline black and
+    dashed in front. With baseline_label None the lines get no legend entries."""
+    with_legend = baseline_label is not None
+    if real_data is not None:
+        axes.stairs(real_data, edges, color=REAL_DATA_COLOR, alpha=REAL_DATA_OPACITY, linewidth=HISTOGRAM_LINE_WIDTH,
+                    zorder=2, label="real data" if with_legend else None)
+    axes.stairs(baseline, edges, color=BASELINE_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, linestyle="--", zorder=10,
+                label=baseline_label)
+    axes.stairs(ablated, edges, color=ABLATION_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, zorder=5,
+                label=ABLATION_LABEL if with_legend else None)
+
+
+def ablation_figure(baseline: list[ArrayLike], ablated: list[ArrayLike], real_data: ArrayLike | None, *,
+                    edges: ArrayLike, inset_edges: ArrayLike, inset_range: tuple[float, float],
+                    ratio_range: tuple[float, float], baseline_label: str, pair_label: str,
+                    target_label: str) -> Figure:
+    """Fig. 7 of the paper: the pair mass spectrum without and with the mean ablation (Eq. 24), an inset of the target
+    peak on linear axes, and the ratio of baseline over ablation below.
+
+    baseline, ablated: one (N_s,) array of pair masses in GeV per seed, the same events within a seed. Each line is
+    the mean over seeds of the counts per bin. real_data: (N,) real-data masses, counted once, or None to draw no
+    real-data line. Bins without ablated pairs have no ratio.
+
+    edges: (bins + 1,) increasing positive bin edges in GeV of the spectrum and the ratio; the paper uses 200 log
+    bins from 0.3 to 300 GeV. inset_edges: bin edges of the inset, 100 equal bins from 50 to 140 GeV in the paper.
+    inset_range: (low, high) in GeV that the inset shows, inside inset_edges; a box marks it on the spectrum.
+    ratio_range: (low, high) of the linear y axis of the ratio. baseline_label: legend entry of the baseline.
+    pair_label: mathtext subscript of m on the mass axes. target_label: mathtext name of the target, shown in the inset.
+    """
+    baseline, ablated = as_seeds(baseline, "baseline"), as_seeds(ablated, "ablated")
+    if len(baseline) != len(ablated):
+        raise ValueError(f"ablated: {len(ablated)} seeds, baseline has {len(baseline)}; expected one array per seed")
+    for index, (base, abl) in enumerate(zip(baseline, ablated)):
+        if len(base) != len(abl):
+            raise ValueError(f"ablated[{index}]: {len(abl)} masses, baseline[{index}] has {len(base)}; expected the "
+                             f"same events")
+    if real_data is not None:
+        real_data = as_masses(real_data, "real_data")
+    edges, inset_edges = as_edges(edges), as_edges(inset_edges)
+    low, high = inset_range
+    if not inset_edges[0] <= low < high <= inset_edges[-1]:
+        raise ValueError(f"inset_range: expected (low, high) with low < high inside the inset edges "
+                         f"{inset_edges[0]:g} to {inset_edges[-1]:g} GeV, got {inset_range}")
+    if not 0 <= ratio_range[0] < ratio_range[1]:
+        raise ValueError(f"ratio_range: expected (low, high) with 0 <= low < high, got {ratio_range}")
+
+    def histograms(bins: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        mean = [np.mean([counts(m, bins) for m in per_seed], axis=0) for per_seed in (baseline, ablated)]
+        return mean[0], mean[1], None if real_data is None else counts(real_data, bins)
+
+    spectra, inset_spectra = histograms(edges), histograms(inset_edges)
+    drawn = [h for h in spectra if h is not None]
+    in_box = (edges[:-1] >= low) & (edges[1:] <= high)
+    box_counts = np.concatenate([h[in_box] for h in drawn])
+    if not np.any(box_counts > 0):
+        raise ValueError(f"inset_range: no spectrum bin inside {low:g} to {high:g} GeV has pairs, so the box around "
+                         f"the inset's range has no height")
+
+    with style.context(STYLE_FILE):
+        figure = Figure(figsize=(COLUMN_WIDTH, ABLATION_HEIGHT))
+        grid = figure.add_gridspec(2, 1, height_ratios=[4.0, 0.7], hspace=0.0)
+        spectrum = figure.add_subplot(grid[0])
+        ratio_panel = figure.add_subplot(grid[1], sharex=spectrum)
+
+        draw_ablation(spectrum, edges, *spectra, baseline_label)
+        spectrum.set_xscale("log")
+        spectrum.set_yscale("log")
+        spectrum.set_xlim(edges[0], edges[-1])
+        log_axis(spectrum, "x")
+        log_axis(spectrum, "y")
+        spectrum.set_ylabel("Number of events")
+        spectrum.tick_params(axis="x", which="both", labelbottom=False)
+        bottom, top = np.log10(spectrum.get_ylim()[0]), np.log10(max(h.max() for h in drawn))
+        spectrum.set_ylim(10.0 ** bottom, 10.0 ** (bottom + (top - bottom) / (1 - LEGEND_ROOM)))
+        spectrum.legend(loc="upper right")
+
+        inset = spectrum.inset_axes(INSET_POSITION)
+        inset.set_zorder(20)
+        inset.set_facecolor("white")
+        draw_ablation(inset, inset_edges, *inset_spectra, None)
+        inset.set_xlim(low, high)
+        inset.set_ylim(0, None)
+        inset.tick_params(which="both", labelsize=INSET_FONT_SIZE)
+        inset.set_xlabel(mass_label(pair_label), fontsize=INSET_FONT_SIZE, labelpad=1)
+        inset.text(0.06, 0.92, target_label, transform=inset.transAxes, va="top", fontsize=INSET_TARGET_SIZE)
+        box_low, box_high = 0.7 * box_counts[box_counts > 0].min(), 1.4 * box_counts.max()
+        spectrum.add_patch(Rectangle((low, box_low), high - low, box_high - box_low, fill=False, edgecolor=BOX_COLOR,
+                                     linewidth=1.0, zorder=15))
+        for box_y, inset_y in ((box_low, 0.0), (box_high, 1.0)):
+            figure.add_artist(ConnectionPatch((low, box_y), (1.0, inset_y), coordsA=spectrum.transData,
+                                              coordsB=inset.transAxes, color=BOX_COLOR, linewidth=0.8, zorder=15))
+
+        ratio = steered_over_baseline(spectra[0], spectra[1])        # baseline over ablation, NaN without ablated pairs
+        ratio_panel.stairs(ratio, edges, color=ABLATION_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, zorder=5, baseline=None)
+        ratio_panel.axhline(1.0, color=BASELINE_COLOR, linewidth=HISTOGRAM_LINE_WIDTH, linestyle="--", zorder=10)
+        ratio_panel.set_ylim(*ratio_range)
+        ratio_panel.yaxis.set_major_locator(MultipleLocator(1.0))
+        ratio_panel.yaxis.set_minor_locator(MultipleLocator(0.5))
+        ratio_panel.set_xlim(edges[0], edges[-1])
+        log_axis(ratio_panel, "x")
+        ratio_panel.set_ylabel(f"{baseline_label} /\n{ABLATION_LABEL}", fontsize=RATIO_LABEL_SIZE)
+        ratio_panel.set_xlabel(mass_label(pair_label))
+        fit_to_width(figure, COLUMN_WIDTH)
     return figure

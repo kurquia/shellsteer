@@ -36,7 +36,8 @@ from shellsteer.lineshape import LineshapeFit, fit_masses
 from shellsteer.metrics import (below_mass_deviation, log_bin_edges, peak_height_change, pole_response_fit, r60,
                                 selectivity_curve, target_shift, window_log_spread)
 from shellsteer.networks import load_network
-from shellsteer.plots import pole_and_width_figure, save, selectivity_figure, steered_spectrum_figure
+from shellsteer.plots import (ablation_figure, pole_and_width_figure, save, selectivity_figure,
+                              steered_spectrum_figure)
 from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edit, ablated_path, generate_pairs,
                                            generated_path, kept_path, load_generated, load_kept, save_generated,
                                            save_kept)
@@ -53,6 +54,7 @@ VECTORS_FILE = "steering_vectors.npz"
 GENERATED_DIR = "generated"
 READOUT_FILE = "readout.json"
 PLOTS_DIR = "plots"
+ABLATION_FIGURE_FILE = "plots/ablation.pdf"
 LINESHAPE_TARGET = "Z"            # the lineshape model of App. E describes the Z only
 
 
@@ -311,8 +313,20 @@ def run_readout(config: Config, run: Path, device: str) -> None:
     log(stage, f"wrote {run / READOUT_FILE}")
 
 
+def real_masses(config: Config, sample: Literal["directions", "steering"], event: np.ndarray, kept_file: Path,
+                rerun: str) -> np.ndarray:
+    """(E,) m_real of the events of `sample`, in the order of `event`, the events of `kept_file`. Stops if the
+    sample holds other events; `rerun` names the stage that wrote `kept_file`."""
+    events = load_events(config.datasets[config.events.dataset], sample, getattr(config.events, sample))
+    if not np.array_equal(events.event, event):
+        raise StageError(f"the {sample} sample holds other events than {kept_file}; rerun `steer {rerun} "
+                         f"--overwrite`")
+    return events.m_real
+
+
 def run_plots(config: Config, run: Path, device: str) -> None:
-    """The steered spectrum (Fig. 3) and the selectivity curve, from the first seed; pole and width (Fig. 5) for Z."""
+    """The steered spectrum with real data (Fig. 3) and the selectivity curve, from the first seed; pole and width
+    (Fig. 5) for Z."""
     stage = "plots"
     result = json.loads(require(run / READOUT_FILE, "readout").read_text())
     require_generated(config, run)
@@ -320,12 +334,13 @@ def run_plots(config: Config, run: Path, device: str) -> None:
     _, counted = counted_pairs(run, seed)
     masses = {alpha: load_generated(generated_path(run, seed, alpha))[0].mass[counted]
               for alpha in (0.0, *config.steering.alphas)}
+    real = real_masses(config, "steering", load_kept(kept_path(run))[1], kept_path(run), "generate")[counted]
     plots, readout = config.plots, config.readout
     folder = run / PLOTS_DIR
     folder.mkdir()
     figures = {
         "steered_spectrum.pdf": steered_spectrum_figure(
-            masses.pop(0.0), masses, None, edges=log_bin_edges(*readout.spectrum_range, readout.spectrum_bins),
+            masses.pop(0.0), masses, real, edges=log_bin_edges(*readout.spectrum_range, readout.spectrum_bins),
             zooms={label: tuple(zoom) for label, zoom in plots.zooms.items()}, zoom_bins=plots.zoom_bins,
             baseline_label=plots.baseline_label, pair_label=plots.pair_label),
         "selectivity.pdf": selectivity_figure({config.steering_vectors.method: result["selectivity curve"]},
@@ -427,6 +442,20 @@ def run_ablate(config: Config, run: Path, device: str) -> None:
             log(stage, f"seed {seed}, {what}: {len(generated.mass):,} pairs in {seconds:.1f} s; wrote {path}")
 
 
+def ablated_masses(config: Config, run: Path, seed: int, kept: np.ndarray, kept_event: np.ndarray,
+                   kept_file: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Baseline and ablated masses of one seed, of the kept pairs with a class on this seed's own baseline mass, as
+    in the paper. Stops if a file holds other events than `kept_file`."""
+    block = config.ablation.block
+    (base, _), (ablated, _) = (load_generated(ablated_path(run, seed, b)) for b in (None, block))
+    for generated, b in ((base, None), (ablated, block)):
+        if not np.array_equal(generated.event, kept_event):
+            raise StageError(f"{ablated_path(run, seed, b)} holds other events than {kept_file}; rerun "
+                             f"`steer ablate --overwrite`")
+    counted = (kept != "") & (class_of(base.mass, config.classes) != "")
+    return base.mass[counted], ablated.mass[counted]
+
+
 def run_ablation_readout(config: Config, run: Path, device: str) -> None:
     """The numbers of the mean ablation (paper Sec. 5.3, Fig. 7): spread of the target peak, change of its height,
     and the deviation below readout.r60_max_mass, per seed and over seeds (metrics.py)."""
@@ -443,21 +472,14 @@ def run_ablation_readout(config: Config, run: Path, device: str) -> None:
     deviation_settings = dict(max_mass=readout.r60_max_mass, min_baseline_pairs=readout.r60_min_baseline_pairs)
     rows, histograms = [], {"spectrum": ([], []), "peak": ([], [])}       # (baseline, ablated) per seed
     for seed in ablation.seeds:
-        (base, _), (ablated, _) = (load_generated(ablated_path(run, seed, block)) for block in (None, ablation.block))
-        for generated, block in ((base, None), (ablated, ablation.block)):
-            if not np.array_equal(generated.event, kept_event):
-                raise StageError(f"{ablated_path(run, seed, block)} holds other events than {kept_file}; rerun "
-                                 f"`steer ablate --overwrite`")
-        # As in the paper: the kept pairs with a class on this seed's own baseline mass.
-        counted = (kept != "") & (class_of(base.mass, classes) != "")
-        b, a = base.mass[counted], ablated.mass[counted]
+        b, a = ablated_masses(config, run, seed, kept, kept_event, kept_file)
         spread = (window_log_spread(b, window), window_log_spread(a, window))
         spectrum = (np.histogram(b, edges)[0], np.histogram(a, edges)[0])
         peak = (np.histogram(b, peak_edges)[0], np.histogram(a, peak_edges)[0])
         for key, pair in (("spectrum", spectrum), ("peak", peak)):
             for per_seed, counts in zip(histograms[key], pair):
                 per_seed.append(counts)
-        row = {"seed": seed, "pairs": int(counted.sum()),
+        row = {"seed": seed, "pairs": len(b),
                "pairs in the target window": {"baseline": int(np.sum((b > window[0]) & (b < window[1]))),
                                               "ablated": int(np.sum((a > window[0]) & (a < window[1])))},
                "spread of log m in the target window": {"baseline": spread[0], "ablated": spread[1],
@@ -493,6 +515,28 @@ def run_ablation_readout(config: Config, run: Path, device: str) -> None:
     log(stage, f"wrote {run / ABLATION_READOUT_FILE}")
 
 
+def run_ablation_plots(config: Config, run: Path, device: str) -> None:
+    """Paper Fig. 7: the spectrum of the baseline, the mean ablation, and real data, counts averaged over seeds."""
+    stage = "ablation-plots"
+    ablation, readout = config.ablation, config.readout
+    kept_file, kept_stage = ablation_kept_file(config, run)
+    kept, kept_event, _ = load_kept(require(kept_file, kept_stage))
+    pairs = [ablated_masses(config, run, seed, kept, kept_event, kept_file) for seed in ablation.seeds]
+    real = real_masses(config, ablation.sample, kept_event, kept_file, kept_stage)[kept != ""]
+    log(stage, f"seeds {list(ablation.seeds)}: {', '.join(f'{len(b):,}' for b, _ in pairs)} pairs; real data of the "
+               f"{len(real):,} kept pairs")
+    settings = ablation.figure
+    figure = ablation_figure(
+        [b for b, _ in pairs], [a for _, a in pairs], real,
+        edges=log_bin_edges(*readout.spectrum_range, readout.spectrum_bins),
+        inset_edges=np.linspace(*ablation.peak_range, ablation.peak_bins + 1),
+        inset_range=tuple(settings.inset_range), ratio_range=tuple(settings.ratio_range),
+        baseline_label=settings.baseline_label, pair_label=settings.pair_label, target_label=settings.target_label)
+    (run / ABLATION_FIGURE_FILE).parent.mkdir()
+    save(figure, run / ABLATION_FIGURE_FILE)
+    log(stage, f"wrote {run / ABLATION_FIGURE_FILE}")
+
+
 @dataclass(frozen=True)
 class Stage:
     name: str
@@ -526,6 +570,8 @@ STAGES = (
     Stage("ablation-readout", "ablation", ("ablate",), (ABLATION_READOUT_FILE,),
           ("readout", "ablation.peak_range", "ablation.peak_bins"), False, run_ablation_readout,
           "spread and height of the target peak and the deviation below 60 GeV under the ablation (Sec. 5.3); CPU"),
+    Stage("ablation-plots", "ablation", ("ablation-readout",), (PLOTS_DIR,), ("ablation.figure",), False,
+          run_ablation_plots, "spectrum of the baseline, the mean ablation, and real data (Fig. 7) as PDF; CPU"),
 )
 STAGE_NAMES = [stage.name for stage in STAGES]
 BY_NAME = {stage.name: stage for stage in STAGES}

@@ -29,7 +29,8 @@ src/<package>/
   networks.py          loads a network by name from networks.yaml
   sampler.py           Euler sampler with seeded noise
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
-  events.py            the events of each sample, the slots of the pair, the edited tokens, the classes
+  events.py            the events of each sample with their real-data mass, the slots of the pair, the edited tokens,
+                       the classes
   gradients.py         gradient pass on the directions sample; per-class sums of the unit gradients
   activation_means.py  mean residual stream of the pair's tokens by class, and c_k of the mean ablation (Eq. 25)
   steering_vectors.py  fkt, fisher, meandiff; per step or constant in time; saved with their metadata
@@ -37,7 +38,8 @@ src/<package>/
   lineshape.py         the paper's fit of the Z lineshape: pole M and width Gamma of a mass spectrum
   luminosity.py        writes the luminosity table from the NNPDF4.0 grid file: python -m shellsteer.luminosity
   metrics.py           R_60, the shift of the target, the selectivity curve, and the numbers of the mean ablation
-  plots.py             steered spectrum with ratio panel and zooms, selectivity curve, pole and width against alpha
+  plots.py             steered spectrum with ratio panel and zooms, selectivity curve, pole and width against alpha,
+                       mean ablation with inset and ratio panel (Fig. 7); real data in both spectra
   paper.mplstyle       the paper's figure style, applied only inside plots.py
   data/
     luminosity_nnpdf40_13tev.csv  quark luminosities with the muon acceptance, written by luminosity.py
@@ -54,7 +56,8 @@ tests/
   test_luminosity.py   the grid reader and the integral on a grid with a known answer; the csv round trip
   test_metrics.py      R_60, the target shift, and the ablation numbers on spectra with known answers
   test_ablation.py     the Ablate and Record hooks, the activation means, and the ablated generation
-  test_cli.py          both runs through `steer` on CPU at a small size; overrides, stage dependencies, refusals
+  test_cli.py          both runs through `steer` on CPU at a small size; overrides, stage dependencies, refusals;
+                       the real-data line of both spectra
   test_plots.py        each figure draws its panels and lines; bad inputs stop
   test_gpu.py          the paper's baseline and sums on a CUDA GPU; skipped without one
 ```
@@ -64,7 +67,8 @@ tests/
 A run writes to `runs/<name>/`, which git ignores. A config runs one of two chains of stages (`cli.py`):
 
     steering run:  gradients, steering-vectors, generate, readout, plots
-    mean ablation: gradients, steering-vectors, activation-means, ablate, ablation-readout   (config with `ablation`)
+    mean ablation: gradients, steering-vectors, activation-means, ablate, ablation-readout, ablation-plots
+                   (config with `ablation`)
 
 ```
 runs/<name>/
@@ -78,7 +82,7 @@ runs/<name>/
       alpha_+0.npz     the baseline: mass and four-momenta of each pair, with the metadata
       alpha_-1.npz     one file per alpha, named by alpha_<alpha:+g>
   readout.json         R_60, target shift, selectivity curve, response fits, lineshape fits  (readout)
-  plots/               steered spectrum, selectivity curve, pole and width                    (plots)
+  plots/               steered spectrum with real data, selectivity curve, pole and width   (plots)
   activation_means.npz per-class sums of the residual stream for c_k                       (activation-means)
   ablated/                                                                                (ablate)
     kept.npz           only when ablation.sample is steering: kept pairs on the first seed's baseline
@@ -86,9 +90,12 @@ runs/<name>/
       baseline.npz     the baseline of the ablated sample
       block_<L>.npz    the mean ablation at block L
   ablation_readout.json  spread and height of the target peak, deviation below 60 GeV       (ablation-readout)
+  plots/
+    ablation.pdf       Fig. 7: baseline, mean ablation, and real data, counts averaged over seeds  (ablation-plots)
 ```
 
-The events load from the Hugging Face cache on every run, so the run folder holds no copy of them.
+The events load from the Hugging Face cache on every run, so the run folder holds no copy of them. The plots stages
+read the real-data masses (`m_real`) of the kept pairs from the same files.
 
 ## Rules
 

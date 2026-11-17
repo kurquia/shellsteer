@@ -25,3 +25,7 @@ steer ablate "$CONFIG"
 # Spread and height of the Z peak and the deviation below 60 GeV, per seed and over seeds (Sec. 5.3).
 # CPU; about a minute; writes ablation_readout.json, a few kB.
 steer ablation-readout "$CONFIG"
+
+# Fig. 7: the spectrum of the baseline, the mean ablation, and real data, an inset of the Z peak, and the ratio.
+# CPU; seconds; writes plots/ablation.pdf.
+steer ablation-plots "$CONFIG"
