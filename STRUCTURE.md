@@ -26,9 +26,12 @@ examples/
   run_paper_main.sh    one command per stage of the main run (Sec. 5); the runs of Figs. 3 and 5 from vectors/
   run_paper_ablation.sh  one command per stage of the mean ablation (Sec. 5.3)
 src/<package>/
-  cli.py               steer <stage> CONFIG [--set key=value]...; steer all CONFIG runs the chain of the config
+  cli.py               steer <stage> CONFIG [--set key=value]... [--devices LIST]; steer all CONFIG runs the chain of
+                       the config
   config.py            reads the YAML into dataclasses; unknown keys are an error; steering or ablation sections
   networks.py          loads a network by name from networks.yaml
+  devices.py           the devices of --devices; one copy of the network per device; batch i on device i mod n,
+                       the results in batch order
   sampler.py           Euler sampler with seeded noise; counts the NaNs of each event, sets them to 0 or stops
   hooks.py             probe for the gradients; steer and ablate edits as `with` blocks
   events.py            the events of each sample with their real-data mass, the slots of the pair, the edited tokens,
@@ -94,6 +97,13 @@ read the real-data masses (`m_real`) of the kept pairs from the same files.
 Every stage that generates events counts the NaNs of the final state, of the four-momenta, and of the pair masses
 (`sampler.on_nan` in the config: set them to 0 as the paper, or stop). The counts appear in a `NaN:` log line and
 under "NaN counts" in the metadata of each file the stage writes.
+
+The stages that run the network (gradients, activation-means, generate, ablate) use every visible GPU, or the CPU
+if there is none; `--devices cuda:0,cuda:1` chooses them, and `--devices cpu,cpu` runs two CPU workers. Batch i runs
+on device i mod n with the noise seed of batch i, and the stage adds the results in batch order. On GPUs of one type
+(name and number of streaming multiprocessors) every file is bit-identical to that of a run on one of them. The log
+names the devices and warns if their types differ. The "device" entry in the metadata of a file is the device type,
+not the number of devices.
 
 ## Shipped vectors
 

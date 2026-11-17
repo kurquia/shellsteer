@@ -21,7 +21,9 @@ import numpy as np
 import torch
 
 from shellsteer.config import Classes
-from shellsteer.events import Events, batches, class_names, class_of, log_pair_mass, pair_mass_squared
+from shellsteer.devices import Workers
+from shellsteer.events import (Events, batch_at, batch_count, class_names, class_of, log_pair_mass,
+                               pair_mass_squared)
 from shellsteer.hooks import Probe, attach, on_step
 from shellsteer.networks import Network
 from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
@@ -33,8 +35,8 @@ def unit(x: torch.Tensor) -> torch.Tensor:
     return torch.where(norm > 0, x / norm.clamp(min=1e-300), torch.zeros_like(x))
 
 
-def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
-                     steps: int, batch_size: int, seed: int, device: str | torch.device,
+def gradient_moments(workers: Workers, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
+                     steps: int, batch_size: int, seed: int,
                      on_nan: OnNan = "set_to_zero") -> tuple[dict[str, np.ndarray], NanCounts]:
     """Run the gradient pass over every event of `events`; return the per-class sums of the module docstring and the
     NaN counts of the generation (`sampler.generate` with `on_nan`).
@@ -42,22 +44,27 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
     kept: (E,) class of each pair from `events.select`, "" for pairs left out.
     A kept pair enters the class of the mass of this pass, which is the baseline mass when the pass runs on the same
     device type. A pair whose gradient has a non-finite entry enters no class and is counted in "non-finite pairs".
+    `workers.map` runs the batches on its devices. Each batch returns its terms of the sums, and they are added on
+    the first device in batch order, so the sums are bit-identical to those of one device of the same type.
     """
     names = class_names(classes)
-    width = 2 * network.model.d_model
+    width = 2 * workers.width
     n_classes, n_blocks = len(names), len(blocks)
-    f64 = dict(dtype=torch.float64, device=device)
-    second = torch.zeros(n_classes, n_blocks, steps, width, width, **f64)
-    unit_sum = torch.zeros(n_classes, n_blocks, steps, width, **f64)
-    raw_sum = torch.zeros(n_classes, n_blocks, steps, width, **f64)
-    summed_second = torch.zeros(n_classes, n_blocks, width, width, **f64)
-    summed_unit_sum = torch.zeros(n_classes, n_blocks, width, **f64)
-    summed_raw_sum = torch.zeros(n_classes, n_blocks, width, **f64)
+    f64 = dict(dtype=torch.float64, device=workers.first)
+    # In the order of the terms of one_batch: second moment, unit sum, raw sum; then the same of the step sum.
+    sums = (torch.zeros(n_classes, n_blocks, steps, width, width, **f64),
+            torch.zeros(n_classes, n_blocks, steps, width, **f64),
+            torch.zeros(n_classes, n_blocks, steps, width, **f64),
+            torch.zeros(n_classes, n_blocks, width, width, **f64),
+            torch.zeros(n_classes, n_blocks, width, **f64),
+            torch.zeros(n_classes, n_blocks, width, **f64))
     count = np.zeros(n_classes, dtype=np.int64)
     non_finite = 0
     nans = []
 
-    for index, batch, minus, plus in batches(events, batch_size, device):
+    def one_batch(index: int, network: Network, device: torch.device):
+        """The terms of the sums of batch `index`, per (class, block) with pairs; the counts; the NaN counts."""
+        batch, minus, plus = batch_at(events, index, batch_size, device)
         rows = slice(index * batch_size, index * batch_size + len(minus))
         probes = [Probe(network, steps, minus, plus) for _ in blocks]
         with ExitStack() as stack:
@@ -71,14 +78,12 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
             grads = torch.autograd.grad(log_m.sum(), [probe.delta for probe in probes])
 
         finite = torch.stack([grad.isfinite().flatten(-2).all(-1).all(0) for grad in grads]).all(0)
-        non_finite += int((~finite).sum())
         mass = pair_mass_squared(p4, minus, plus).detach().clamp(min=1e-6).sqrt()
-        nans.append(NanCounts.of_batch(generated, mass))
         pair_class = class_of(mass.double().cpu().numpy(), classes)
         pair_class[(kept[rows] == "") | ~finite.cpu().numpy()] = ""
         members = [torch.from_numpy(np.flatnonzero(pair_class == name)).to(device) for name in names]
-        count += [len(m) for m in members]
 
+        terms = []                                                             # (class, block, the six terms)
         for b, grad in enumerate(grads):                                       # one block at a time (memory)
             g = grad.flatten(-2).double()          # (steps, pairs, width): the two tokens side by side, negative first
             g = torch.where(finite[None, :, None], g, torch.zeros_like(g))
@@ -88,22 +93,27 @@ def gradient_moments(network: Network, events: Events, kept: np.ndarray, classes
                 if len(m) == 0:
                     continue
                 xu = u[:, m]                                                   # (steps, n, width)
-                second[c, b] += xu.transpose(-1, -2) @ xu
-                unit_sum[c, b] += xu.sum(1)
-                raw_sum[c, b] += g[:, m].sum(1)
                 xsu = u_summed[m]                                              # (n, width)
-                summed_second[c, b] += xsu.T @ xsu
-                summed_unit_sum[c, b] += xsu.sum(0)
-                summed_raw_sum[c, b] += summed[m].sum(0)
+                terms.append((c, b, (xu.transpose(-1, -2) @ xu, xu.sum(1), g[:, m].sum(1),
+                                     xsu.T @ xsu, xsu.sum(0), summed[m].sum(0))))
             del g, summed, u, u_summed
+        return terms, [len(m) for m in members], int((~finite).sum()), NanCounts.of_batch(generated, mass)
 
+    for terms, members, batch_non_finite, batch_nans in workers.map(batch_count(events, batch_size), one_batch):
+        for c, b, values in terms:
+            for total, value in zip(sums, values):
+                total[c, b] += value.to(workers.first)
+        count += members
+        non_finite += batch_non_finite
+        nans.append(batch_nans)
+
+    second, unit_sum, raw_sum, summed_second, summed_unit_sum, summed_raw_sum = (total.cpu().numpy() for total in sums)
     moments = {
         "classes": np.array(names), "blocks": np.array(blocks), "count": count,
         "non-finite pairs": np.array(non_finite),
-        "unit second moment": second.cpu().numpy(), "unit sum": unit_sum.cpu().numpy(),
-        "raw sum": raw_sum.cpu().numpy(),
-        "step-summed unit second moment": summed_second.cpu().numpy(),
-        "step-summed unit sum": summed_unit_sum.cpu().numpy(), "step-summed raw sum": summed_raw_sum.cpu().numpy(),
+        "unit second moment": second, "unit sum": unit_sum, "raw sum": raw_sum,
+        "step-summed unit second moment": summed_second, "step-summed unit sum": summed_unit_sum,
+        "step-summed raw sum": summed_raw_sum,
     }
     return moments, NanCounts(on_nan, events.event, np.concatenate(nans))
 
