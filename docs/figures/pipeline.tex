@@ -148,6 +148,10 @@
 \def\yb{-3.45}
 \def\yc{-6.90}
 
+% the mean ablation generates the steering sample again, with and without the ablation: drawn first, so that the
+% steering-sample cylinder and the steering generate box, drawn later, cover it
+\draw[flow] (\xd+0.55,2.30) -- (\xd+0.55,\yb+\boxh);
+
 % ---- inputs -----------------------------------------------------------------------------------------------------
 \node[data] (dir)  at (\xa,\ya) {directions sample\\{\smf 1,040,000 events}};
 \node[data] (ship) at (\xc,2.75) {\texttt{vectors/}\\\texttt{main\_block1.npz}};
@@ -235,11 +239,6 @@
 \fill (\trunk,\ya) circle (1.8pt);
 \fill (\trunk,\yb+0.25) circle (1.8pt);
 \draw[flow] (allfs.east |- 0,\yc-0.25) -- (kgen.west |- 0,\yc-0.25);
-% the mean ablation generates the steering sample again, with and without the ablation; the line crosses the arrow
-% generate -> readout near its tail, with a white gap that shows the crossing
-\def\xcross{\xd+\boxw+0.16}
-\draw[white, line width=3pt] (\xcross,\ya+0.25) -- (\xcross,\ya-0.25);
-\draw[flow] (ste.east) -- (\xcross,2.75) -- (\xcross,\ya-1.725) -- (\xd,\ya-1.725) -- (ab.north);
 \draw[flow] (kgen) -- (kro);
 \draw[flow] (kro) -- (kpl);
 \draw[flow] (kpl) -- (f4);
