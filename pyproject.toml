@@ -17,6 +17,12 @@ dependencies = [
     "matplotlib>=3.8",
 ]
 
+[project.optional-dependencies]
+# ShellGATr (backbone lgatr_slim) needs lgatr, pinned to the commit ShellFlow's own gatr extra pins.
+gatr = [
+    "lgatr @ git+https://github.com/heidelberg-hepml/lgatr@86d3fb8ab6cbd591c9447a55dc01e553a8b1848d",
+]
+
 [project.scripts]
 steer = "shellsteer.cli:main"
 
@@ -24,8 +30,11 @@ steer = "shellsteer.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true  # the gatr extra pins lgatr to a git commit
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/shellsteer"]
 
 [tool.uv.sources]
-shellflow = { git = "https://github.com/pomidori/ShellFlow", rev = "2622c84" }
+shellflow = { git = "https://github.com/pomidori/ShellFlow", rev = "8ddbfe3" }
