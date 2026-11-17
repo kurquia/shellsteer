@@ -40,10 +40,11 @@ from shellsteer.activation_means import (activation_means, load_activation_means
 from shellsteer.config import Config, load_config
 from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
                                 parse_devices)
-from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, load_events, load_final_states,
-                               select, tokens_of_type)
+from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, download, load_events,
+                               load_final_states, select, tokens_of_type)
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
-from shellsteer.kinematics import VARIABLES, largest_changes, load_panels, save_panels, type_masks, type_panels
+from shellsteer.kinematics import (MASS, MASSIVE_TYPES, VARIABLES, largest_changes, load_panels, mass_panels, real_mass,
+                                   save_panels, type_masks, type_panels)
 from shellsteer.lineshape import LineshapeFit, fit_masses
 from shellsteer.metrics import (below_mass_deviation, log_bin_edges, peak_height_change, pole_response_fit, r60,
                                 selectivity_curve, target_shift, window_log_spread)
@@ -660,9 +661,24 @@ def run_ablation_plots(config: Config, run: Path, devices: Devices) -> None:
     log(stage, f"wrote {run / ABLATION_FIGURE_FILE}")
 
 
+def steering_rows(config: Config) -> tuple[np.ndarray | None, str]:
+    """The ShellFlow rows of the first events.steering events of the steering file, and the file; None if the file
+    has no `rows` key."""
+    path = download(config.dataset("steering"), "steering")
+    with np.load(path) as data:
+        rows = data["rows"][:config.events.steering] if "rows" in data.files else None
+    return rows, path
+
+
 def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
-    """Counts of p_T, eta, phi, and E of every particle type for real data, the baseline, and each alpha (Figs. 4 and
-    14), and the largest change per bin that Sec. 5.1 and App. D.1 quote."""
+    """Counts of p_T, eta, phi, E, and m of every particle type for real data, the baseline, and each alpha (Figs. 4
+    and 14), and the largest change per bin that Sec. 5.1 and App. D.1 quote.
+
+    m is the mass column of Fig. 14, for jets, large-R jets, and hadronic taus: the decoded mass of the generated files
+    and `kinematics.real_mass` of the `rows` of the steering file. Without either, the counts have no m and the log
+    and the metadata say what is missing. The largest change of the types other than the edited one uses p_T, eta,
+    phi, and E, as the paper's number; the readout lists the largest change of m on its own.
+    """
     stage = "kinematics-readout"
     seed, alphas = config.steering.seeds[0], [0.0, *config.steering.alphas]
     paths = {alpha: require(generated_path(run, seed, alpha), "generate") for alpha in alphas}
@@ -683,14 +699,35 @@ def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
         log(stage, f"no {', '.join(absent)} in the {len(real):,} events: left out of the counts and the figures")
     masks = {code: mask for code, mask in masks.items() if mask.any()}
     kinematics = config.kinematics
-    panels = type_panels(real.p4, generated.pop(0.0).four_momenta,
+    baseline = generated.pop(0.0)
+    panels = type_panels(real.p4, baseline.four_momenta,
                          {alpha: events.four_momenta for alpha, events in generated.items()}, masks,
                          bins=kinematics.bins)
+    missing_mass = None             # why the counts have no m, or None
+    if any(code in MASSIVE_TYPES for code in masks):
+        no_mass = [str(paths[alpha]) for alpha, events in ((0.0, baseline), *generated.items()) if events.mass is None]
+        rows, path = (None, None) if no_mass else steering_rows(config)
+        if no_mass:
+            missing_mass = (f"{len(no_mass)} of the {len(paths)} generated files, such as {no_mass[0]}, hold no "
+                            f"decoded masses (written before `steer generate` stored them); rerun "
+                            f"`steer generate --overwrite`")
+        elif rows is None:
+            missing_mass = (f"the steering file {path} has no `rows` key, so no real-data masses; it needs the "
+                            f"event files with the ShellFlow rows")
+        else:
+            measured = real_mass(rows, particle_type, particle_mask)
+            del rows
+            for code, panel in mass_panels(measured, baseline.mass,
+                                           {alpha: events.mass for alpha, events in generated.items()}, masks,
+                                           bins=kinematics.bins).items():
+                panels[code][MASS] = panel
+    if missing_mass is not None:
+        log(stage, f"no mass column in Fig. 14: {missing_mass}")
     particles = {PARTICLE_TYPES[code]: {"particles": int(mask.sum()), "events": int(mask.any(1).sum())}
                  for code, mask in masks.items()} | {name: {"particles": 0, "events": 0} for name in absent}
     save_panels(run / KINEMATICS_FILE, panels, {"seed": seed, "alphas": alphas, "bins": kinematics.bins,
                                                 "particle types": {str(c): n for c, n in PARTICLE_TYPES.items()},
-                                                "particles": particles})
+                                                "particles": particles, "no mass column": missing_mass})
     log(stage, f"wrote {run / KINEMATICS_FILE}")
 
     minimum = kinematics.readout_min_baseline
@@ -705,9 +742,13 @@ def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
         largest = max(found) if found else None
         others[f"{alpha:+g}"] = None if largest is None else dict(zip(
             ("largest change", "particle type", "variable", "bin centre"), largest))
+    mass_changes = {PARTICLE_TYPES[code]: {f"{alpha:+g}": change for alpha, change in
+                                            largest_changes(MASS, panels[code][MASS], minimum).items()}
+                    for code in masks if MASS in panels[code]}
     result = {"seed": seed, "alphas": alphas, "bins": kinematics.bins, "edited type": edited,
               "min baseline particles in a bin": minimum, "particles": particles,
-              "largest change per bin": changes, f"largest change per bin of the types other than the {edited}": others}
+              "largest change per bin": changes, f"largest change per bin of the types other than the {edited}": others,
+              "largest change per bin of the mass": mass_changes, "no mass column": missing_mass}
     (run / KINEMATICS_READOUT_FILE).write_text(json.dumps(result, indent=1) + "\n")
     for variable in ("pt", "eta", "phi"):
         parts = [f"alpha {key}: " + ("no bin" if change is None else
@@ -716,9 +757,14 @@ def run_kinematics_readout(config: Config, run: Path, devices: Devices) -> None:
         log(stage, f"{edited} {variable}, largest |steered / baseline - 1| in bins with >= {minimum:,} baseline "
                    f"particles: " + "; ".join(parts))
     for key, change in others.items():
-        log(stage, f"alpha {key}, every type but the {edited}: " + ("no bin" if change is None else
-            f"{change['largest change']:.4f} ({change['particle type']} {change['variable']} at "
-            f"{change['bin centre']:.3g})"))
+        log(stage, f"alpha {key}, every type but the {edited}, p_T, eta, phi, and E: " + (
+            "no bin" if change is None else f"{change['largest change']:.4f} ({change['particle type']} "
+                                            f"{change['variable']} at {change['bin centre']:.3g})"))
+    for name, by_alpha in mass_changes.items():
+        log(stage, f"{name} m, largest |steered / baseline - 1| in bins with >= {minimum:,} baseline particles: "
+                   + "; ".join(f"alpha {key}: " + ("no bin" if change is None else
+                               f"{change['largest change']:.4f} at {change['bin centre']:.3g} GeV")
+                               for key, change in by_alpha.items()))
     log(stage, f"wrote {run / KINEMATICS_READOUT_FILE}")
 
 
@@ -726,8 +772,12 @@ def run_kinematics_plots(config: Config, run: Path, devices: Devices) -> None:
     """Fig. 4, the edited type's p_T, eta, and phi, and Fig. 14, every other type, from the counts of
     kinematics-readout."""
     stage = "kinematics-plots"
-    panels, _ = load_panels(require(run / KINEMATICS_FILE, "kinematics-readout"))
+    panels, metadata = load_panels(require(run / KINEMATICS_FILE, "kinematics-readout"))
     kinematics, edited = config.kinematics, PAIR_TYPES[config.dataset("directions").pair]
+    if metadata.get("no mass column") is not None or "no mass column" not in metadata:
+        reason = metadata.get("no mass column", f"{run / KINEMATICS_FILE} was written before kinematics-readout "
+                                                "counted m; rerun `steer kinematics-readout --overwrite`")
+        log(stage, f"Fig. 14 without the mass column: {reason}")
     figures = {
         KINEMATICS_FIGURE_FILE: kinematics_figure(panels[edited], particle=edited,
                                                   baseline_label=kinematics.baseline_label,
@@ -783,7 +833,8 @@ STAGES = (
           run_ablation_plots, "spectrum of the baseline, the mean ablation, and real data (Fig. 7) as PDF; CPU"),
     Stage("kinematics-readout", ("kinematics",), ("generate",), (KINEMATICS_FILE, KINEMATICS_READOUT_FILE),
           ("kinematics.bins", "kinematics.readout_min_baseline"), False, run_kinematics_readout,
-          "counts of p_T, eta, phi, and E of every particle type, largest change per bin (Figs. 4 and 14); CPU"),
+          "counts of p_T, eta, phi, E, and m of every particle type, largest change per bin (Figs. 4 and 14); "
+          "CPU"),
     Stage("kinematics-plots", ("kinematics",), ("kinematics-readout",), (PLOTS_DIR,),
           ("kinematics.ratio_min_baseline", "kinematics.other_types_ratio_range", "kinematics.baseline_label"),
           False, run_kinematics_plots, "kinematics of the edited type (Fig. 4) and of every other type (Fig. 14) as "
