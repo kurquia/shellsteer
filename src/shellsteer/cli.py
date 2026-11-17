@@ -301,11 +301,7 @@ def run_generate(config: Config, run: Path, devices: Devices) -> None:
                                                 tokens=config.steering.tokens, pair=edited, steps=edit_steps,
                                                 norm_restore=config.steering.norm_restore)
             start = time.perf_counter()
-            if pairs:
-                generated = generate_pairs(workers, events, edit, seed=seed, **sizes)
-            else:
-                generated = generate_events(workers.networks[0], events, edit, seed=seed, device=workers.first,
-                                            **sizes)
+            generated = (generate_pairs if pairs else generate_events)(workers, events, edit, seed=seed, **sizes)
             seconds = time.perf_counter() - start
             log(stage, f"seed {seed}, alpha {alpha:+g}: {generated.nans.text()}")
             if pairs and seed == config.steering.seeds[0] and alpha == 0:

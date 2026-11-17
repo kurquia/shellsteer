@@ -30,7 +30,7 @@ generated again for that sample and each seed:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -38,7 +38,7 @@ import numpy as np
 import torch
 
 from shellsteer.devices import Workers
-from shellsteer.events import (Events, FinalStates, batch_at, batch_count, edited_tokens, final_state_batches,
+from shellsteer.events import (Events, FinalStates, batch_at, batch_count, edited_tokens, final_state_batch_at,
                                pair_mass, tokens_of_type)
 from shellsteer.hooks import Ablate, Steer, attach, on_step
 from shellsteer.networks import Network
@@ -150,33 +150,39 @@ def generate_pairs(workers: Workers, events: Events, edit: Edit | Ablation | Non
                           nans=NanCounts(on_nan, events.event, np.concatenate(nans)))
 
 
-def generate_events(network: Network, events: FinalStates, edit: Edit | None, *, steps: int, batch_size: int,
-                    seed: int, device: str | torch.device, on_nan: OnNan = "set_to_zero") -> GeneratedEvents:
+def generate_events(workers: Workers, events: FinalStates, edit: Edit | None, *, steps: int, batch_size: int,
+                    seed: int, on_nan: OnNan = "set_to_zero") -> GeneratedEvents:
     """Generate every event of a sample without pairs with `edit`, or without edits for edit=None (paper Fig. 4).
 
     The edit adds alpha xi^- to every negative and alpha xi^+ to every positive particle of type `edit.pair`, so it
-    needs tokens all_of_type; an event without such a particle is generated as without the edit. Batch i starts from
-    the noise of batch_seed(seed, i), as in `generate_pairs`.
+    needs tokens all_of_type; an event without such a particle is generated as without the edit. Batch i holds events
+    i x batch_size to (i + 1) x batch_size - 1 in file order and starts from the noise of batch_seed(seed, i), as in
+    `generate_pairs`; `workers.map` runs it on one of its devices and returns the batches in order, so the four-momenta
+    and the NaN counts per event are in file order and equal those of one device of the same type.
     """
     if edit is not None:
         if not isinstance(edit, Edit) or edit.tokens != "all_of_type":
             raise ValueError(f"edit: events without pairs take only a steering edit with tokens all_of_type, got "
                              f"{getattr(edit, 'tokens', type(edit).__name__)!r}")
-        check_edit(edit, steps, network.model.d_model)
-        edit = replace(edit, xi=edit.xi.to(device))
-    four_momenta, nans = [], []
-    for index, batch in final_state_batches(events, batch_size, device):
+        check_edit(edit, steps, workers.width)
+
+    def one_batch(index: int, network: Network, device: torch.device) -> tuple[np.ndarray, np.ndarray]:
+        batch = final_state_batch_at(events, index, batch_size, device)
         state = prior(network, batch, batch_seed(seed, index))
         settings = dict(on_nan=on_nan, label=f"batch {index} of seed {seed}")
         if edit is None:
             generated = generate(network, batch, state, steps, **settings)
         else:
-            hook = Steer(edit.xi, edit.alpha, *tokens_of_type(batch, edit.pair), steps=edit.steps,
+            hook = Steer(edit.xi.to(device), edit.alpha, *tokens_of_type(batch, edit.pair), steps=edit.steps,
                          norm_restore=edit.norm_restore)
             with attach(network, edit.block, hook):
                 generated = generate(network, batch, state, steps, on_step=on_step(hook), **settings)
-        four_momenta.append(generated.four_momenta.cpu().numpy())
-        nans.append(NanCounts.of_batch(generated, None))
+        return generated.four_momenta.cpu().numpy(), NanCounts.of_batch(generated, None)
+
+    four_momenta, nans = [], []
+    for batch_four_momenta, counts in workers.map(batch_count(events, batch_size), one_batch):
+        four_momenta.append(batch_four_momenta)
+        nans.append(counts)
     return GeneratedEvents(four_momenta=np.concatenate(four_momenta),
                            particle_type=events.batch["particle_type"].numpy().astype(np.int16),
                            particle_charge=events.batch["particle_charge"].numpy().astype(np.int16),

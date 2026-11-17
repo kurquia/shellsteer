@@ -73,7 +73,7 @@ pairs and steers sample C, 1,000,000 events of every final state.
 With `steering_vectors.from_file`, a run starts from the `steering_vectors.npz` of an earlier run. `steer
 steering-vectors` checks the file against the config (method, in_time, balance, classes, the edited block, Euler
 steps, token width, and the network and class windows if the file records them) and copies it into the run folder.
-The steering run then has no gradients stage. In the mean ablation, `steer gradients` makes only
+The steering and kinematics runs then have no gradients stage. In the mean ablation, `steer gradients` makes only
 `directions_kept.npz`, the kept pairs that c_k needs, and no `gradient_moments.npz`. The readout takes S (Eq. 21)
 from the vectors file; for a file that stores no S, `readout.json` holds `null` with the reason, and Fig. 5 has no
 first-order line.
@@ -121,10 +121,10 @@ under "NaN counts" in the metadata of each file the stage writes.
 
 The stages that run the network (gradients, activation-means, generate, ablate) use every visible GPU, or the CPU
 if there is none; `--devices cuda:0,cuda:1` chooses them, and `--devices cpu,cpu` runs two CPU workers. Batch i runs
-on device i mod n with the noise seed of batch i, and the stage adds the results in batch order. On GPUs of one type
-(name and number of streaming multiprocessors) every file is bit-identical to that of a run on one of them. The log
-names the devices and warns if their types differ. The "device" entry in the metadata of a file is the device type,
-not the number of devices.
+on device i mod n with the noise seed of batch i, and the stage adds the results in batch order. This holds for the
+pairs and for every particle of sample C. On GPUs of one type (name and number of streaming multiprocessors) every
+file is bit-identical to that of a run on one of them. The log names the devices and warns if their types differ.
+The "device" entry in the metadata of a file is the device type, not the number of devices.
 
 ## Shipped vectors
 

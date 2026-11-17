@@ -205,7 +205,8 @@ def batches(events: Events, batch_size: int, device: str | torch.device
         yield index, *batch_at(events, index, batch_size, device)
 
 
-def batch_count(events: Events, batch_size: int) -> int:
+def batch_count(events: Events | FinalStates, batch_size: int) -> int:
+    """Number of batches of `batch_size` events, the last one possibly shorter."""
     return -(-len(events) // batch_size)
 
 
@@ -220,8 +221,15 @@ def batch_at(events: Events, index: int, batch_size: int, device: str | torch.de
 def final_state_batches(events: FinalStates, batch_size: int, device: str | torch.device
                         ) -> Iterator[tuple[int, dict[str, torch.Tensor]]]:
     """(batch index, batch) on `device`, in file order, as `batches` for a sample without pairs."""
-    for index, start in enumerate(range(0, len(events), batch_size)):
-        yield index, {key: value[start:start + batch_size].to(device) for key, value in events.batch.items()}
+    for index in range(batch_count(events, batch_size)):
+        yield index, final_state_batch_at(events, index, batch_size, device)
+
+
+def final_state_batch_at(events: FinalStates, index: int, batch_size: int, device: str | torch.device
+                         ) -> dict[str, torch.Tensor]:
+    """Batch `index` of `final_state_batches` (events index x batch_size onwards, in file order) on `device`."""
+    part = slice(index * batch_size, (index + 1) * batch_size)
+    return {key: value[part].to(device) for key, value in events.batch.items()}
 
 
 def class_of(mass: np.ndarray, classes: Classes) -> np.ndarray:
