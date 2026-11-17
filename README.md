@@ -57,7 +57,7 @@ The mean ablation removes the component of the residual stream along $\boldsymbo
 ## Install
 
 The package needs Python 3.13 or later and [uv](https://docs.astral.sh/uv/).
-The network code comes from [pomidori/ShellFlow](https://github.com/pomidori/ShellFlow) at commit `2622c84`, pinned in `pyproject.toml`.
+The network code comes from [pomidori/ShellFlow](https://github.com/pomidori/ShellFlow) at commit `8ddbfe3`, pinned in `pyproject.toml`.
 
 ```bash
 git clone TODO-repository-url
@@ -65,6 +65,15 @@ cd TODO-repository-name
 uv sync
 source .venv/bin/activate
 ```
+
+`configs/networks.yaml` also lists the two networks of App. C, `shellflow_b` and `shellgatr`.
+`shellgatr` uses the L-GATr-slim layers of [lgatr](https://github.com/heidelberg-hepml/lgatr), which the optional `gatr` extra installs at a pinned commit:
+
+```bash
+uv sync --extra gatr
+```
+
+`shellsteer` runs `shellgatr` with TF32 off, as in the paper.
 
 `uv.lock` pins torch 2.10.0. The paper's runs used it with CUDA 12.8 on NVIDIA B200 GPUs.
 The checkpoint and the event samples download from Hugging Face on the first run, at the revisions pinned in `configs/networks.yaml` and `configs/datasets.yaml`.

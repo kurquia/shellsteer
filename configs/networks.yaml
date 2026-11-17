@@ -2,7 +2,8 @@
 # Checkpoints: https://huggingface.co/pomidori73/ShellFlow
 # Model code: https://github.com/pomidori/ShellFlow
 # revision: the commit of the Hugging Face repository, so the same file always loads.
-# width: entries of the residual stream per token.
+# width: entries of the residual stream per token, the d_model of the checkpoint. ShellGATr stores each token flat at
+# the output of a block: 32 Lorentz vectors (4 entries each) then 96 scalars, 4 x 32 + 96 = 224.
 # dataloader_config: the ShellFlow dataloader config (in shellflow/config/) the network was trained with; its constants
 # normalise the extra features of the events.
 
@@ -12,3 +13,21 @@ shellflow:
   file: union_1LMET30_2to4lep/model.ckpt
   width: 128
   dataloader_config: dataloader_config_06_1LMET30_2to4lep_reduced.yaml
+
+# Paper App. C: two networks trained on the 2to4lep selection only.
+# ShellFlow-B: the attention blocks of ShellFlow, with input and output layers per particle type.
+shellflow_b:
+  hf_repo: pomidori73/ShellFlow
+  revision: 0cbc1bb6ddbcd44e5339c9817ebeb4bf2678591a
+  file: shellflow_b_2to4lep/model.ckpt
+  width: 128
+  dataloader_config: dataloader_config_06_2to4lep_reduced.yaml
+
+# ShellGATr: the L-GATr-slim blocks (backbone lgatr_slim); needs the gatr extra (uv sync --extra gatr) and runs with
+# TF32 off (networks.precision).
+shellgatr:
+  hf_repo: pomidori73/ShellFlow
+  revision: 0cbc1bb6ddbcd44e5339c9817ebeb4bf2678591a
+  file: shellgatr_2to4lep/model.ckpt
+  width: 224
+  dataloader_config: dataloader_config_06_2to4lep_reduced.yaml

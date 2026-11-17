@@ -1052,6 +1052,14 @@ wheels = [
 ]
 
 [[package]]
+name = "lgatr"
+version = "2.0.0.post3"
+source = { git = "https://github.com/heidelberg-hepml/lgatr?rev=86d3fb8ab6cbd591c9447a55dc01e553a8b1848d#86d3fb8ab6cbd591c9447a55dc01e553a8b1848d" }
+dependencies = [
+    { name = "torch" },
+]
+
+[[package]]
 name = "lightning"
 version = "2.6.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2305,7 +2313,7 @@ wheels = [
 [[package]]
 name = "shellflow"
 version = "0.1.0"
-source = { git = "https://github.com/pomidori/ShellFlow?rev=2622c84#2622c84587f440a481ba453ca8e6fe635c040981" }
+source = { git = "https://github.com/pomidori/ShellFlow?rev=8ddbfe3#8ddbfe3cf272296da28c005d9bfa33450ad52581" }
 dependencies = [
     { name = "aiohttp" },
     { name = "awkward" },
@@ -2339,17 +2347,24 @@ dependencies = [
     { name = "torch" },
 ]
 
+[package.optional-dependencies]
+gatr = [
+    { name = "lgatr" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.26" },
+    { name = "lgatr", marker = "extra == 'gatr'", git = "https://github.com/heidelberg-hepml/lgatr?rev=86d3fb8ab6cbd591c9447a55dc01e553a8b1848d" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "scipy", specifier = ">=1.11" },
-    { name = "shellflow", git = "https://github.com/pomidori/ShellFlow?rev=2622c84" },
+    { name = "shellflow", git = "https://github.com/pomidori/ShellFlow?rev=8ddbfe3" },
     { name = "torch", specifier = ">=2.4" },
 ]
+provides-extras = ["gatr"]
 
 [[package]]
 name = "sniffio"

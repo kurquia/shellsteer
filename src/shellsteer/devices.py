@@ -2,7 +2,8 @@
 
 `parse_devices` reads the --devices option: every visible GPU by default, the CPU if none is visible. `load_workers`
 loads one copy of the network per device, once per stage. `Workers.map` runs batch i on device i mod n, one thread
-per device, and returns the results in the order of i.
+per device, and returns the results in the order of i. Each batch runs inside `networks.precision(network)`, which
+turns TF32 off for ShellGATr.
 
 Batch i draws its noise from `sampler.batch_seed(seed, i)` on its own device, so on GPUs of one type it gives the
 same numbers on any of them. The stages assemble the results in batch order and add the sums of a batch in the same
@@ -24,7 +25,7 @@ from typing import Callable, Iterator, TypeVar
 import torch
 
 from shellsteer.config import NetworkEntry
-from shellsteer.networks import Network, load_network
+from shellsteer.networks import Network, load_network, precision
 
 R = TypeVar("R")
 Devices = tuple[torch.device, ...]
@@ -138,7 +139,7 @@ class Workers:
         if len(self.devices) == 1:
             network, device = self.networks[0], self.devices[0]
             for index in range(count):
-                with on_device(device):
+                with on_device(device), precision(network):
                     result = work(index, network, device)
                 yield result
             return
@@ -176,7 +177,7 @@ class _InOrder:
                 if self.stopped:
                     return
             try:
-                with on_device(device):
+                with on_device(device), precision(network):
                     entry = (work(index, network, device), None)
             except BaseException as error:              # handed to the caller, who raises it
                 entry = (None, error)
