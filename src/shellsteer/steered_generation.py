@@ -3,7 +3,7 @@ alpha xi(t_k) to the two muon tokens at the output of block L and at every Euler
 four-momenta of each pair.
 
 The vector comes from `steering_vectors.load_steering_vector`, the events from
-`events.load_events(entry, "steering", n)`.
+`events.load_events(entry, "steering", n, network)`.
 Without an edit, `generate_pairs` attaches no hook and generates the baseline. Batch i starts from the noise of
 `sampler.batch_seed(seed, i)` for every alpha, so a steered pair has the noise of the same baseline pair.
 
