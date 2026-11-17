@@ -4,10 +4,10 @@
 # events: number of events in each file.
 
 validation_muon_pairs:
-  hf_repo: not-uploaded-yet/shellflow-validation-muon-pairs
-  revision: not-uploaded-yet
+  hf_repo: kurquia/shellsteer-events
+  revision: ed05bb9ac082d25ce67a0578a819b4eb15d89434
   files:
-    directions: directions.npz
-    steering: steering.npz
+    directions: directions-dataset.npz
+    steering: steering-dataset.npz
   pair: muon                     # muon | electron | tau
   events: 1040000
