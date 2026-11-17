@@ -44,7 +44,7 @@ def per_pair_gradients(network, events, blocks, steps, batch_size, seed):
             for block, probe in zip(blocks, probes):
                 stack.enter_context(attach(network, block, probe))
             p4 = generate(network, batch, prior(network, batch, batch_seed(seed, start // batch_size)), steps,
-                          grad=True, on_step=on_step(*probes))
+                          grad=True, on_step=on_step(*probes)).four_momenta
             grads = torch.autograd.grad(log_pair_mass(p4, minus, plus).sum(), [p.delta for p in probes])
         out.append(torch.stack(grads).flatten(-2).double())
     return torch.cat(out, dim=2)
@@ -58,8 +58,9 @@ def test_moments_equal_the_sums_of_the_per_pair_gradients(network, events):
     classes = Classes(min_mass=float(min(mass.min(), edges[0])) - 1e-3,
                       windows={"low": [float(edges[0]), float(edges[1])], "high": [float(edges[2]), float(edges[3])]})
     kept = select(mass, events.priority, classes, 28)
-    moments = gradient_moments(network, events, kept, classes, blocks=blocks, steps=steps, batch_size=batch_size,
-                               seed=seed, device="cpu")
+    moments, nans = gradient_moments(network, events, kept, classes, blocks=blocks, steps=steps,
+                                     batch_size=batch_size, seed=seed, device="cpu")
+    assert np.array_equal(nans.event, events.event) and nans.counts.sum() == 0
 
     g = per_pair_gradients(network, events, blocks, steps, batch_size, seed)
     assert list(moments["classes"]) == ["low", "high", "rest"]

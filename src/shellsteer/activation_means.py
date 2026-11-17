@@ -22,12 +22,14 @@ from shellsteer.config import Classes
 from shellsteer.events import Events, batches, class_names, class_of, pair_mass
 from shellsteer.hooks import Record, attach, on_step
 from shellsteer.networks import Network
-from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
 
 
 def activation_means(network: Network, events: Events, kept: np.ndarray, classes: Classes, *, blocks: list[int],
-                     steps: int, batch_size: int, seed: int, device: str | torch.device) -> dict[str, np.ndarray]:
-    """Run the forward pass over every event of `events` and return the per-class sums of the module docstring.
+                     steps: int, batch_size: int, seed: int, device: str | torch.device,
+                     on_nan: OnNan = "set_to_zero") -> tuple[dict[str, np.ndarray], NanCounts]:
+    """Run the forward pass over every event of `events`; return the per-class sums of the module docstring and the
+    NaN counts of the generation (`sampler.generate` with `on_nan`).
 
     kept: (E,) class of each pair from `events.select`, "" for pairs left out.
     "sum" has shape (classes, blocks, steps, 2 width). A pair with a non-finite token enters no class and is counted
@@ -38,6 +40,7 @@ def activation_means(network: Network, events: Events, kept: np.ndarray, classes
     total = torch.zeros(len(names), len(blocks), steps, width, dtype=torch.float64, device=device)
     count = np.zeros(len(names), dtype=np.int64)
     non_finite = 0
+    nans = []
 
     for index, batch, minus, plus in batches(events, batch_size, device):
         rows = slice(index * batch_size, index * batch_size + len(minus))
@@ -45,11 +48,13 @@ def activation_means(network: Network, events: Events, kept: np.ndarray, classes
         with ExitStack() as stack:
             for block, record in zip(blocks, records):
                 stack.enter_context(attach(network, block, record))
-            p4 = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps,
-                          on_step=on_step(*records))
+            generated = generate(network, batch, prior(network, batch, batch_seed(seed, index)), steps, on_nan=on_nan,
+                                 label=f"batch {index} of the activation means, seed {seed}", on_step=on_step(*records))
+        mass = pair_mass(generated.four_momenta, minus, plus)
+        nans.append(NanCounts.of_batch(generated, mass))
         finite = torch.stack([record.tokens.isfinite().all(-1).all(0) for record in records]).all(0)
         non_finite += int((~finite).sum())
-        pair_class = class_of(pair_mass(p4, minus, plus).double().cpu().numpy(), classes)
+        pair_class = class_of(mass.double().cpu().numpy(), classes)
         pair_class[(kept[rows] == "") | ~finite.cpu().numpy()] = ""
         for c, name in enumerate(names):
             members = torch.from_numpy(np.flatnonzero(pair_class == name)).to(device)
@@ -57,8 +62,9 @@ def activation_means(network: Network, events: Events, kept: np.ndarray, classes
             for b, record in enumerate(records):
                 total[c, b] += record.tokens[:, members].double().sum(1)
 
-    return {"classes": np.array(names), "blocks": np.array(blocks), "count": count,
-            "non-finite pairs": np.array(non_finite), "sum": total.cpu().numpy()}
+    means = {"classes": np.array(names), "blocks": np.array(blocks), "count": count,
+             "non-finite pairs": np.array(non_finite), "sum": total.cpu().numpy()}
+    return means, NanCounts(on_nan, events.event, np.concatenate(nans))
 
 
 def mean_projection(means: dict[str, np.ndarray], xi: np.ndarray | torch.Tensor, block: int) -> np.ndarray:

@@ -35,7 +35,7 @@ import torch
 from shellsteer.events import Events, batches, edited_tokens, pair_mass
 from shellsteer.hooks import Ablate, Steer, attach, on_step
 from shellsteer.networks import Network
-from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.sampler import NanCounts, OnNan, batch_seed, generate, prior
 
 # Every generated file records these settings. The caller can add others, such as the network and dataset revisions.
 METADATA_KEYS = ("alpha", "block", "target", "method", "seed", "steps", "edited steps", "tokens", "norm_restore",
@@ -70,6 +70,8 @@ class GeneratedPairs:
     mass: np.ndarray          # (E,) float64 invariant mass of the pair in GeV
     four_momenta: np.ndarray  # (E, 2, 4) float32 four-momenta (px, py, pz, E) of the pair in GeV, negative first
     event: np.ndarray         # (E,) index of the event in the combined dataset
+    nans: NanCounts | None = None   # the NaN counts of the generation; None for pairs read from a file, whose
+                                    # metadata holds them under "NaN counts"
 
 
 def check_edit(edit: Edit | Ablation, steps: int, width: int) -> None:
@@ -90,22 +92,24 @@ def check_edit(edit: Edit | Ablation, steps: int, width: int) -> None:
 
 
 def generate_pairs(network: Network, events: Events, edit: Edit | Ablation | None, *, steps: int, batch_size: int,
-                   seed: int, device: str | torch.device) -> GeneratedPairs:
+                   seed: int, device: str | torch.device, on_nan: OnNan = "set_to_zero") -> GeneratedPairs:
     """Generate every event of `events` with `edit` (steering or ablation), or without edits for edit=None.
 
     Batch i holds events i x batch_size to (i + 1) x batch_size - 1 in file order and starts from the noise of
     batch_seed(seed, i). The mass is `events.pair_mass` of the float32 four-momenta, then converted to float64.
+    on_nan: what `sampler.generate` does with a NaN; the counts are in the `nans` of the result.
     """
     if edit is not None:
         check_edit(edit, steps, network.model.d_model)
         edit = replace(edit, xi=edit.xi.to(device))
         if isinstance(edit, Ablation):
             edit = replace(edit, mean=edit.mean.to(device))
-    masses, four_momenta = [], []
+    masses, four_momenta, nans = [], [], []
     for index, batch, minus, plus in batches(events, batch_size, device):
         state = prior(network, batch, batch_seed(seed, index))
+        settings = dict(on_nan=on_nan, label=f"batch {index} of seed {seed}")
         if edit is None:
-            p4 = generate(network, batch, state, steps)
+            generated = generate(network, batch, state, steps, **settings)
         else:
             if isinstance(edit, Ablation):
                 hook = Ablate(edit.xi, edit.mean, minus, plus)
@@ -113,11 +117,15 @@ def generate_pairs(network: Network, events: Events, edit: Edit | Ablation | Non
                 hook = Steer(edit.xi, edit.alpha, *edited_tokens(batch, minus, plus, edit.pair, edit.tokens),
                              steps=edit.steps, norm_restore=edit.norm_restore)
             with attach(network, edit.block, hook):
-                p4 = generate(network, batch, state, steps, on_step=on_step(hook))
+                generated = generate(network, batch, state, steps, on_step=on_step(hook), **settings)
+        p4 = generated.four_momenta
         rows = torch.arange(len(minus), device=p4.device)
-        masses.append(pair_mass(p4, minus, plus).double().cpu().numpy())
+        mass = pair_mass(p4, minus, plus)
+        masses.append(mass.double().cpu().numpy())
         four_momenta.append(torch.stack([p4[rows, minus], p4[rows, plus]], dim=1).cpu().numpy())
-    return GeneratedPairs(mass=np.concatenate(masses), four_momenta=np.concatenate(four_momenta), event=events.event)
+        nans.append(NanCounts.of_batch(generated, mass))
+    return GeneratedPairs(mass=np.concatenate(masses), four_momenta=np.concatenate(four_momenta), event=events.event,
+                          nans=NanCounts(on_nan, events.event, np.concatenate(nans)))
 
 
 def generated_path(run: str | Path, seed: int, alpha: float) -> Path:
@@ -147,11 +155,14 @@ def save_generated(path: str | Path, generated: GeneratedPairs, metadata: dict,
     """Write the mass, the four-momenta, the event index, and the settings that made them to one .npz.
 
     metadata must hold every key of `required` and can hold more: METADATA_KEYS for steering, ABLATION_METADATA_KEYS
-    for the ablation. Creates the folder of `path` if needed.
+    for the ablation. The NaN counts of `generated.nans`, if any, go in as "NaN counts". Creates the folder of `path`
+    if needed.
     """
     missing = [key for key in required if key not in metadata]
     if missing:
         raise ValueError(f"metadata has no {missing}")
+    if generated.nans is not None:
+        metadata = {**metadata, "NaN counts": generated.nans.metadata()}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, **{"mass": generated.mass, "four-momenta": generated.four_momenta, "event": generated.event,

@@ -56,6 +56,10 @@ class Sampler(Section):
     steps: int
     batch_size: int
     precision: Literal["float32"]
+    # What happens to a NaN in the final state or the four-momenta (sampler.generate). Every run counts the NaNs and
+    # writes the counts to its log and to the metadata of its files. set_to_zero: set NaN coordinates of the final
+    # state to 0, as ShellFlow's sampler and the paper; stop: stop with an error that names the batch and the count.
+    on_nan: Literal["set_to_zero", "stop"] = "set_to_zero"
 
 
 class Gradients(Section):

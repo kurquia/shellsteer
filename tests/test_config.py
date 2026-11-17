@@ -52,12 +52,19 @@ def write_variant(tmp_path, change):
         (lambda r: r["readout"].update(r60_max_mass=500), "readout.r60_max_mass"),
         (lambda r: r["lineshape"].update(bins=5), "more bins than the 5 fitted parameters"),
         (lambda r: r["plots"]["zooms"].update(Z=[140, 50]), r"plots.zooms\['Z'\]"),
+        (lambda r: r["sampler"].update(on_nan="zero"), "Input should be 'set_to_zero' or 'stop'"),
     ],
 )
 def test_bad_values_stop(tmp_path, change, message):
     path = write_variant(tmp_path, change)
     with pytest.raises(ValueError, match=message):
         load_config(path)
+
+
+def test_on_nan_defaults_to_the_paper(tmp_path):
+    assert load_config(MAIN).sampler.on_nan == "set_to_zero"
+    assert load_config(write_variant(tmp_path, lambda r: r["sampler"].pop("on_nan"))).sampler.on_nan == "set_to_zero"
+    assert load_config(write_variant(tmp_path, lambda r: r["sampler"].update(on_nan="stop"))).sampler.on_nan == "stop"
 
 
 def test_steps_range(tmp_path):

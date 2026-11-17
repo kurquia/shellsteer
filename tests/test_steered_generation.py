@@ -9,7 +9,7 @@ from shellsteer.config import read_networks
 from shellsteer.events import BATCH_KEYS, NEGATIVE, POSITIVE, Events, edited_tokens, pair_mass, pair_slots
 from shellsteer.hooks import Steer, attach
 from shellsteer.networks import load_network
-from shellsteer.sampler import batch_seed, generate, prior
+from shellsteer.sampler import NanError, batch_seed, generate, prior
 from shellsteer.steered_generation import (Edit, GeneratedPairs, generate_pairs, generated_path, kept_path,
                                            load_generated, load_kept, save_generated, save_kept)
 
@@ -64,7 +64,7 @@ def by_hand(network, events, alpha, tokens):
         steer = Steer(XI, alpha, *edited_tokens(batch, minus, plus, "muon", tokens))
         with attach(network, BLOCK, steer):
             p4 = generate(network, batch, prior(network, batch, batch_seed(SEED, index)), STEPS,
-                          on_step=steer.set_step)
+                          on_step=steer.set_step).four_momenta
         rows = torch.arange(len(minus))
         masses.append(pair_mass(p4, minus, plus).double().numpy())
         four_momenta.append(torch.stack([p4[rows, minus], p4[rows, plus]], dim=1).numpy())
@@ -147,3 +147,35 @@ def test_save_and_load_kept(tmp_path):
     assert np.array_equal(event, [5, 6, 7, 8]) and metadata == {"seed": 2041, "keep": 3}
     with pytest.raises(ValueError, match="kept has 4 pairs, event has 3"):
         save_kept(kept_path(tmp_path), kept, np.array([5, 6, 7]), {})
+
+
+def nan_in_row(row: int):
+    """A hook on the output of a block that writes NaN into the residual stream of one row of every batch."""
+    def hook(h):
+        h = h.clone()
+        h[row] = float("nan")
+        return h
+    return hook
+
+
+def test_nan_counts_reach_the_metadata(network, events, tmp_path):
+    clean = run(network, events, None)
+    assert clean.nans.counts.shape == (32, 3) and clean.nans.counts.sum() == 0
+    with attach(network, BLOCK, nan_in_row(2)):
+        generated = run(network, events, None)
+    nans = generated.nans.metadata()
+    assert nans["sampler.on_nan"] == "set_to_zero" and nans["events"] == 32
+    assert nans["events with NaN in the final state"] == [102, 114, 126]     # row 2 of the batches of 12, 12, and 8
+    assert nans["NaN coordinates of the final state"] > 0 and nans["NaN entries of the four-momenta"] == 0
+    others = ~np.isin(events.event, [102, 114, 126])
+    assert np.array_equal(generated.mass[others], clean.mass[others])
+    save_generated(tmp_path / "pairs.npz", generated, METADATA)
+    assert load_generated(tmp_path / "pairs.npz")[1] == METADATA | {"NaN counts": nans}
+
+
+def test_nan_stops_the_generation_with_on_nan_stop(network, events):
+    with attach(network, BLOCK, nan_in_row(2)):
+        with pytest.raises(NanError, match="batch 0 of seed 2041: .* NaN coordinates in the final state of 1 of 12 "
+                                           "events"):
+            generate_pairs(network, events, edit(1.0), steps=STEPS, batch_size=BATCH_SIZE, seed=SEED, device="cpu",
+                           on_nan="stop")

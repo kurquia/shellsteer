@@ -241,8 +241,8 @@ def test_one_batch_gradient_pass_agrees_with_the_paper(network, directions, clas
     paper = load(DIRECTIONS_MOMENTS)
     events = make_events(directions, BATCH, "row")
     kept = paper["class"].astype(object)
-    moments = gradient_moments(network, events, kept, classes, blocks=[1], steps=STEPS, batch_size=BATCH,
-                               seed=DIRECTIONS_SEED, device="cuda")
+    moments, _ = gradient_moments(network, events, kept, classes, blocks=[1], steps=STEPS, batch_size=BATCH,
+                                  seed=DIRECTIONS_SEED, device="cuda")
     assert [str(c) for c in moments["classes"]] == [str(c) for c in paper["classes"]]
     assert int(moments["non-finite pairs"]) == 0
     paper_count = np.array([(kept == str(c)).sum() for c in paper["classes"]])
@@ -284,7 +284,7 @@ def per_pair_gradients(network, events, steps, batch_size, seed):
             for block, probe in zip(BLOCKS, probes):
                 stack.enter_context(attach(network, block, probe))
             p4 = generate(network, batch, prior(network, batch, batch_seed(seed, start // batch_size)), steps,
-                          grad=True, on_step=on_step(*probes))
+                          grad=True, on_step=on_step(*probes)).four_momenta
             g = torch.autograd.grad(log_pair_mass(p4, minus, plus).sum(), [p.delta for p in probes])
         grads.append(torch.stack(g).flatten(-2).double())
         masses.append(pair_mass(p4.detach(), minus, plus).double().cpu().numpy())
@@ -298,8 +298,8 @@ def test_moments_equal_the_sums_of_the_per_pair_gradients(network, directions, c
     mass = generate_pairs(network, events, None, steps=STEPS, batch_size=batch_size, seed=DIRECTIONS_SEED,
                           device="cuda").mass
     kept = select(mass, events.priority, classes, keep)
-    moments = gradient_moments(network, events, kept, classes, blocks=BLOCKS, steps=STEPS, batch_size=batch_size,
-                               seed=DIRECTIONS_SEED, device="cuda")
+    moments, _ = gradient_moments(network, events, kept, classes, blocks=BLOCKS, steps=STEPS,
+                                  batch_size=batch_size, seed=DIRECTIONS_SEED, device="cuda")
 
     g, pass_mass = per_pair_gradients(network, events, STEPS, batch_size, DIRECTIONS_SEED)
     assert int(moments["non-finite pairs"]) == 0
@@ -331,13 +331,13 @@ def test_steering_at_alpha_zero_is_the_baseline_and_runs_at_alpha_one(network, d
     minus, plus = events.minus.cuda(), events.plus.cuda()
     xi = torch.from_numpy(np.load(XI_Z_BLOCK1)).cuda()
     state = prior(network, batch, batch_seed(DIRECTIONS_SEED, 0))
-    baseline = generate(network, batch, state, STEPS)
+    baseline = generate(network, batch, state, STEPS).four_momenta
 
     steered = {}
     for alpha in (0.0, 1.0):
         steer = Steer(xi, alpha, *edited_tokens(batch, minus, plus, "muon", "pair"))
         with attach(network, 1, steer):
-            steered[alpha] = generate(network, batch, state, STEPS, on_step=steer.set_step)
+            steered[alpha] = generate(network, batch, state, STEPS, on_step=steer.set_step).four_momenta
     assert torch.equal(steered[0.0], baseline)
     assert steered[1.0].isfinite().all()
     shift = pair_mass(steered[1.0], minus, plus).log() - pair_mass(baseline, minus, plus).log()

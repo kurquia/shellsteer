@@ -55,8 +55,8 @@ def test_a_run_from_the_events_to_the_figures(tmp_path, entry):
     directions = load_events(entry, "directions", EVENTS)
     baseline = generate_pairs(network, directions, None, seed=config.gradients.seed, **sizes).mass
     kept = select(baseline, directions.priority, classes, KEEP)
-    moments = gradient_moments(network, directions, kept, classes, blocks=[BLOCK], seed=config.gradients.seed,
-                               **sizes)
+    moments, _ = gradient_moments(network, directions, kept, classes, blocks=[BLOCK], seed=config.gradients.seed,
+                                  **sizes)
     save_moments(run / "gradient_moments.npz", moments, {"steps": STEPS})
     moments, _ = load_moments(run / "gradient_moments.npz")
     assert moments["count"].sum() == KEEP and moments["non-finite pairs"] == 0

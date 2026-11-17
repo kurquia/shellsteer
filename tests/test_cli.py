@@ -17,8 +17,12 @@ import pytest
 import yaml
 
 import shellsteer.events as events_module
+import shellsteer.sampler as sampler_module
+from shellsteer.activation_means import load_activation_means
 from shellsteer.cli import BY_NAME, STAGES, StageError, ancestors, main, read_config
 from shellsteer.events import BATCH_KEYS
+from shellsteer.gradients import load_moments
+from shellsteer.steered_generation import load_generated, load_kept
 
 DATA = Path(__file__).parent / "data"
 PAPER = Path(__file__).parent.parent / "configs" / "paper"
@@ -174,3 +178,44 @@ def test_each_set_takes_one_key_and_config_may_come_last(tmp_path, capsys):
     assert "sampler.steps" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         main(["gradient", str(MAIN)])                                        # not a stage: argparse stops
+
+
+def test_nan_counts_are_in_the_metadata_of_every_file(runs):
+    small, ablation = runs / "small", runs / "small_ablation"
+    counts = [load_generated(small / "generated" / "seed_2042" / "alpha_-1.npz")[1]["NaN counts"],
+              load_generated(ablation / "ablated" / "seed_2040" / "block_1.npz")[1]["NaN counts"],
+              load_kept(small / "directions_kept.npz")[2]["NaN counts"],
+              *(load_moments(small / "gradient_moments.npz")[1][key] for key in ("NaN counts",
+                                                                                 "NaN counts of the baseline")),
+              load_activation_means(ablation / "activation_means.npz")[1]["NaN counts"]]
+    for count in counts:
+        assert count["sampler.on_nan"] == "set_to_zero" and count["events"] == EVENTS
+        assert count["NaN coordinates of the final state"] == count["NaN entries of the four-momenta"] == 0
+
+
+def test_a_run_made_before_on_nan_existed_counts_as_set_to_zero(runs, tmp_path, capsys):
+    shutil.copytree(runs / "small", tmp_path / "small")
+    config = yaml.safe_load((tmp_path / "small" / "config.yaml").read_text())
+    del config["sampler"]["on_nan"]
+    (tmp_path / "small" / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    assert steer("readout", tmp_path, "--overwrite") == 0
+    assert steer("readout", tmp_path, "sampler.on_nan=stop", "--overwrite") == 1
+    assert "sampler.on_nan" in capsys.readouterr().err
+
+
+def test_on_nan_stop_ends_the_stage_with_the_batch(tmp_path, capsys, monkeypatch):
+    decode_without_nan = sampler_module.decode
+
+    def decode_with_nan(*args, **kwargs):
+        four = decode_without_nan(*args, **kwargs)
+        four[0, 2, 0] = float("nan")
+        return four
+    with np.load(DATA / "batch32.npz") as data:
+        arrays = {key: np.tile(data[key], (EVENTS // 32,) + (1,) * (data[key].ndim - 1)) for key in BATCH_KEYS}
+    arrays["event"], arrays["priority"] = np.arange(EVENTS), np.arange(EVENTS)
+    np.savez(tmp_path / "sample.npz", **arrays)
+    monkeypatch.setattr(events_module, "hf_hub_download", lambda *args, **kwargs: str(tmp_path / "sample.npz"))
+    monkeypatch.setattr(sampler_module, "decode", decode_with_nan)
+    assert steer("gradients", tmp_path / "runs", "sampler.on_nan=stop") == 1
+    assert ("batch 0 of seed 2040: 1 NaN entries in the four-momenta of 1 of 256 events (sampler.on_nan is stop)"
+            in capsys.readouterr().err)

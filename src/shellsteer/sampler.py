@@ -3,20 +3,75 @@
 Flow time runs from t = 0 (noise) to t = 1 (data). `prior` draws the state at t = 0 from a seed. `generate`
 integrates it to t = 1 in `steps` Euler steps and decodes the result to four-momenta.
 
+ShellFlow's sampler sets every NaN coordinate of the final state to 0 before the decode. `generate` counts these NaNs
+per event, and the NaN entries of the decoded four-momenta, and returns the counts with the four-momenta. A NaN that
+appears at any step stays NaN to the last step, so the final state shows it. The decode clamps energies and masses,
+so a finite final state gives finite four-momenta; an infinite direction coordinate gives NaN ones. `on_nan` chooses
+what happens to a NaN: "set_to_zero" keeps ShellFlow's replacement, and the paper's events, bit for bit; "stop" raises
+`NanError`.
+
 ShellFlow's own sampler (`_generate_batch_rfm` in its training callback) runs without gradients. The gradient pass
 needs them, so this module repeats its prior, Euler step, and decode, with the same operations in the same order.
 """
 
 from __future__ import annotations
 
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Literal, NamedTuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from shellflow.models.riemannian_DiTs_geometry import MASSLESS_TYPES, exp_map_sphere_stable, minkowski_to_collator
 
 from shellsteer.networks import Network
+
+OnNan = Literal["set_to_zero", "stop"]
+
+
+class NanError(RuntimeError):
+    """A generation with on_nan = "stop" met a NaN."""
+
+
+class Generated(NamedTuple):
+    four_momenta: torch.Tensor      # (B, N, 4) px, py, pz, E in GeV
+    nan_state: torch.Tensor         # (B,) int64 NaN coordinates of the final state per event, padding slots included,
+                                    # counted before they are set to 0
+    nan_four_momenta: torch.Tensor  # (B,) int64 NaN entries of the four-momenta per event, after the decode
+
+
+@dataclass(frozen=True)
+class NanCounts:
+    """The NaN counts of one pass over a sample, per event in file order. `metadata()` goes into the files it writes.
+
+    counts: (E, 3) int64, per event the NaN coordinates of the final state, the NaN entries of the four-momenta, and
+    1 if the mass of the pair is NaN, else 0.
+    """
+    on_nan: OnNan
+    event: np.ndarray               # (E,) index of the event in the combined dataset
+    counts: np.ndarray
+
+    @staticmethod
+    def of_batch(generated: Generated, mass: torch.Tensor) -> np.ndarray:
+        """(B, 3) counts of one batch, with `mass` the (B,) pair mass computed from `generated.four_momenta`."""
+        return torch.stack([generated.nan_state, generated.nan_four_momenta, mass.isnan().long()], 1).cpu().numpy()
+
+    def metadata(self) -> dict:
+        state, four, mass = self.counts.T
+        return {"sampler.on_nan": self.on_nan, "events": len(self.event),
+                "NaN coordinates of the final state": int(state.sum()),
+                "events with NaN in the final state": self.event[state > 0].tolist(),
+                "NaN entries of the four-momenta": int(four.sum()),
+                "events with NaN in the four-momenta": self.event[four > 0].tolist(),
+                "NaN pair masses": int(mass.sum()), "events with NaN pair mass": self.event[mass > 0].tolist()}
+
+    def text(self) -> str:
+        """One line for the log."""
+        state, four, mass = self.counts.T
+        return (f"NaN: {int(state.sum()):,} final-state coordinates in {int((state > 0).sum()):,} events (set to 0), "
+                f"{int(four.sum()):,} four-momentum entries in {int((four > 0).sum()):,} events, {int(mass.sum()):,} "
+                f"pair masses")
 
 
 def batch_seed(seed: int, index: int) -> int:
@@ -50,8 +105,13 @@ def prior(network: Network, batch: dict[str, torch.Tensor], seed: int) -> torch.
 
 
 def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tensor, steps: int, *,
-             grad: bool = False, on_step: Callable[[int], None] | None = None) -> torch.Tensor:
-    """Integrate `state` from t = 0 to t = 1 and return the four-momenta (px, py, pz, E) in GeV, shape (B, N, 4).
+             on_nan: OnNan = "set_to_zero", label: str = "the batch", grad: bool = False,
+             on_step: Callable[[int], None] | None = None) -> Generated:
+    """Integrate `state` from t = 0 to t = 1; return the four-momenta (px, py, pz, E) in GeV, shape (B, N, 4), and
+    the NaN counts of each event.
+
+    on_nan: "set_to_zero" sets NaN coordinates of the final state to 0 before the decode, as ShellFlow's sampler;
+        "stop" raises NanError, naming `label` and the counts, if the final state or the four-momenta hold a NaN.
 
     grad: keep the autograd graph through every step and the decode, for the gradient pass. Each step is
         recomputed during the backward pass instead of being stored.
@@ -59,6 +119,8 @@ def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tens
         which xi(t_k) to add. It runs inside the recomputed region, so the backward pass sees the right k.
     """
     module, model = network.module, network.model
+    if on_nan not in ("set_to_zero", "stop"):
+        raise ValueError(f"on_nan: {on_nan!r} is not one of 'set_to_zero', 'stop'")
     if module.chart != "onshell" or module.direction_geometry != "S2":
         raise ValueError(f"only the onshell chart on S2 is supported, "
                          f"got {module.chart} on {module.direction_geometry}")
@@ -85,8 +147,17 @@ def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tens
             s4 = state[..., 4] + dt * v[..., 4]
             state = torch.cat([s0.unsqueeze(-1), direction, s4.unsqueeze(-1)], dim=-1) * active
 
+        nan_state = state.isnan().flatten(1).sum(1)
+        if on_nan == "stop" and bool(nan_state.any()):
+            raise NanError(f"{label}: {int(nan_state.sum()):,} NaN coordinates in the final state of "
+                           f"{int((nan_state > 0).sum()):,} of {b:,} events (sampler.on_nan is stop)")
         state = torch.where(state.isnan(), torch.zeros_like(state), state)   # as ShellFlow's sampler
-        return decode(model, state, batch["particle_type"], batch["particle_mask"], eps=1e-12 if grad else 0.0)
+        four_momenta = decode(model, state, batch["particle_type"], batch["particle_mask"], eps=1e-12 if grad else 0.0)
+        nan_four_momenta = four_momenta.isnan().flatten(1).sum(1)
+        if on_nan == "stop" and bool(nan_four_momenta.any()):
+            raise NanError(f"{label}: {int(nan_four_momenta.sum()):,} NaN entries in the four-momenta of "
+                           f"{int((nan_four_momenta > 0).sum()):,} of {b:,} events (sampler.on_nan is stop)")
+        return Generated(four_momenta, nan_state, nan_four_momenta)
 
 
 def decode(model: torch.nn.Module, state: torch.Tensor, p_type: torch.Tensor, p_mask: torch.Tensor,

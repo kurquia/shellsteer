@@ -119,8 +119,9 @@ def test_activation_means_match_a_hand_computation(network, events):
     baseline = generate_pairs(network, events, None, steps=STEPS, batch_size=BATCH_SIZE, seed=SEED, device="cpu")
     kept = class_of(baseline.mass, CLASSES)
     kept[[0, 5, 17]] = ""                                       # pairs left out by events.select
-    means = activation_means(network, events, kept, CLASSES, blocks=[0, BLOCK], steps=STEPS, batch_size=BATCH_SIZE,
-                             seed=SEED, device="cpu")
+    means, nans = activation_means(network, events, kept, CLASSES, blocks=[0, BLOCK], steps=STEPS,
+                                   batch_size=BATCH_SIZE, seed=SEED, device="cpu")
+    assert nans.counts.shape == (32, 3) and nans.counts.sum() == 0
     assert means["count"].sum() == (kept != "").sum() and means["non-finite pairs"] == 0
     assert means["sum"].shape == (4, 2, STEPS, 2 * WIDTH)
 
@@ -135,7 +136,7 @@ def test_activation_means_match_a_hand_computation(network, events):
             seen[len(seen)] = torch.cat((h[rows, minus], h[rows, plus]), -1).double()
             return h
         with attach(network, BLOCK, keep):
-            p4 = generate(network, batch, prior(network, batch, batch_seed(SEED, index)), STEPS)
+            p4 = generate(network, batch, prior(network, batch, batch_seed(SEED, index)), STEPS).four_momenta
         assert np.array_equal(pair_mass(p4, minus, plus).double().numpy(), baseline.mass[part])
         tokens.append(torch.stack([seen[k] for k in range(STEPS)], 1))
     tokens = torch.cat(tokens)[torch.from_numpy(kept != "")]       # (kept pairs, steps, 2 width)
@@ -179,7 +180,7 @@ def test_generate_pairs_ablation_equals_a_loop_over_batches(network, events):
         ablate = Ablate(XI, MEAN, minus, plus)
         with attach(network, BLOCK, ablate):
             p4 = generate(network, batch, prior(network, batch, batch_seed(SEED, index)), STEPS,
-                          on_step=ablate.set_step)
+                          on_step=ablate.set_step).four_momenta
         masses.append(pair_mass(p4, minus, plus).double().numpy())
     assert np.array_equal(generated.mass, np.concatenate(masses))
     assert (generated.mass != baseline.mass).all()
