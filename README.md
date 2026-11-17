@@ -126,7 +126,7 @@ The stages of the steering chain write these files to `runs/<name>/`:
 | `gradients` | Generates the directions sample without edits, keeps 1,000,000 pairs, and sums the unit gradients per class, block, and step | `gradient_moments.npz`, `directions_kept.npz` | GPU |
 | `steering-vectors` | Solves for the steering vector of each class and block, or copies the file of `steering_vectors.from_file` after a check against the config | `steering_vectors.npz` | CPU |
 | `generate` | Generates the steering sample without the edit and for each $\alpha$ and seed | `generated/seed_<seed>/alpha_<alpha>.npz` | GPU |
-| `readout` | Computes $\mathcal{R}_{60}$, the shift of the Z, the selectivity curve, and the lineshape fits | `readout.json` | CPU |
+| `readout` | Computes $\mathcal{R}_{60}$, the shift of the Z, the selectivity curve, the lineshape fits, and the first-order columns of Table 2 ($\sum_k S$, and the means over the steps of the cosine and of $\lambda$) | `readout.json` | CPU |
 | `plots` | Draws the steered spectrum (Fig. 3), the selectivity curve, and the pole and width against $\alpha$ (Fig. 5) | `plots/*.pdf` | CPU |
 
 The kinematics chain (`all_muons.yaml`) runs `gradients`, `steering-vectors`, and `generate` as above, then two stages of its own.
@@ -203,10 +203,9 @@ The gradient pass adds about one hour to a run that does not start from `vectors
 | `all_muons.yaml` | Sec. 5.1, Fig. 4; App. D.1, Fig. 14 | 5 | about 70 min from the shipped vectors |
 | `methods_z_fisher.yaml` | App. B, Figs. 9 and 10 | 27 | about 6.3 h, plus the gradient pass |
 | `methods_z_meandiff.yaml` | App. B, Figs. 8 and 10 | 21 | about 4.9 h, plus the gradient pass |
+| `networks_z_shellflow_b.yaml`, `networks_z_shellgatr.yaml` | App. C, Figs. 11 to 13, Table 4 | 39 each | about 8 h (`ShellFlow-B`) and 10.5 h (`ShellGATr`), with the gradient pass |
 | `blocks_z_block0.yaml`, `blocks_z_block3.yaml` | App. D.2, Figs. 15 and 16 | 39 each | about 9 h each, plus the gradient pass |
 | `quarkonia_jpsi.yaml`, `quarkonia_upsilon.yaml` | App. D.4, Figs. 18 and 19 | 39 each | about 9 h each from the shipped vectors |
-
-TODO: App. C, the steering of `ShellFlow-B` and `ShellGATr`, has no config yet.
 
 Fig. 14 of the paper also shows the mass $m$ of jets, large-R jets, and hadronic taus.
 The float32 four-momenta do not give this mass for a hadronic tau, which is below 1 GeV: $E^2 - |\vec p|^2$ cancels.
@@ -215,6 +214,34 @@ The real-data mass is $\sqrt{E^2 - (p_T \cosh\eta)^2}$ in float64, from $p_T$, $
 If the generated files lack the decoded masses, as files written before `steer generate` stored them do, `kinematics-readout` logs what is missing, and Fig. 14 has no mass column.
 The 2.4% of App. D.1, the largest change per bin of the other particle types, uses $p_T$, $\eta$, $\phi$, and $E$ only, as in the paper.
 `kinematics_readout.json` lists the largest change of $m$ on its own.
+
+#### App. C: `ShellFlow-B` and `ShellGATr`
+
+> The 2to4lep event files of App. C are not on Hugging Face yet.
+> Their entry `validation_muon_pairs_2to4lep` in `configs/datasets.yaml` has `revision: TODO-after-upload`, and every stage that reads events stops with a message until the revision holds the commit of the upload.
+
+App. C steers the Z at block 1 of the two networks trained on 2to4lep alone.
+Each config is `main_z_block1.yaml` with another network, the 2to4lep events, the paper's 12 values of $\alpha$, and seeds 2041 to 2043.
+Each network keeps the pairs from its own baselines, as in the paper.
+`ShellGATr` needs the `gatr` extra (`uv sync --extra gatr`).
+
+```bash
+steer all configs/paper/networks_z_shellflow_b.yaml
+steer all configs/paper/networks_z_shellgatr.yaml
+```
+
+Fig. 13 and Table 4 put the three networks side by side.
+They also need the Fig. 5 run of `ShellFlow` from [the next section](#change-settings-with---set), `runs/main_z_block1_fig5`:
+
+```bash
+python -m shellsteer.compare_runs runs/main_z_block1_fig5 runs/networks_z_shellflow_b runs/networks_z_shellgatr \
+    --out runs/networks_z
+```
+
+It writes Fig. 13 to `runs/networks_z/pole_and_width.pdf` and Table 4 to `runs/networks_z/table.json`, and prints the table.
+The error bars are the standard deviation over the three seeds with ddof 1, as in the paper's Fig. 13.
+The steered spectra of these runs draw all 12 values of $\alpha$.
+`examples/run_paper_networks.sh` lists every stage, with time and disk estimates, and the two short runs that draw Figs. 11 and 12 with the paper's values of $\alpha$.
 
 ### Change settings with `--set`
 
@@ -309,9 +336,10 @@ Set `sampler.on_nan: stop` to stop the run at the first NaN instead.
 | Training skims | 2to4lep [[doi](https://doi.org/10.7483/OPENDATA.ATLAS.ZXYW.FXJO)] and 1LMET30 [[doi](https://doi.org/10.7483/OPENDATA.ATLAS.KPYL.P0EE)] | The events `ShellFlow` was trained on. |
 | Muon-pair samples | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `directions-dataset.npz`, `steering-dataset.npz` | 1,040,000 validation events each, with one muon pair, the real four-momenta, and the real pair mass. The first gives the gradients and steering vectors, the second is steered (Figs. 3, 5, and 7). |
 | All final states | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `all-final-states-dataset.npz` | 1,000,000 validation events of every final state, with the real four-momenta (Fig. 4). |
+| 2to4lep muon-pair samples | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `2to4lep-directions-dataset.npz`, `2to4lep-steering-dataset.npz` (not uploaded yet) | 1,040,000 validation events each of the 2to4lep selection, with one muon pair, for `ShellFlow-B` and `ShellGATr` (App. C). |
 | Network | [pomidori73/ShellFlow](https://huggingface.co/pomidori73/ShellFlow): `union_1LMET30_2to4lep/model.ckpt` | The `ShellFlow` checkpoint; residual-stream width 128. |
 | Model code | [pomidori/ShellFlow](https://github.com/pomidori/ShellFlow) | The `ShellFlow` architecture, installed as a dependency. |
-| Steering vectors | `vectors/main_block1.npz` in this repository | The steering vectors of the main text: Z, J/ψ, Υ, and rest at block 1, for each of the 200 Euler steps, with the gradient response per step. |
+| Steering vectors | `vectors/main_block1.npz` in this repository | The steering vectors of the main text: Z, J/ψ, Υ, and rest at block 1, for each of the 200 Euler steps, with the gradient response, the cosine, and the FKT eigenvalue per step. |
 
 `configs/datasets.yaml` and `configs/networks.yaml` pin the Hugging Face commit of each file, so a run always loads the same files.
 
