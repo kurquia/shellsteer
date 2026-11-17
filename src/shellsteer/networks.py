@@ -1,12 +1,14 @@
 """Load a network from its entry in networks.yaml.
 
 The checkpoint comes from Hugging Face. The model code comes from the ShellFlow package.
+The checkpoint must name the dataloader config of the entry, if it names one.
 The returned network uses the EMA weights, as in the paper, in eval mode and with no gradients on the weights.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePath
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -32,4 +34,9 @@ def load_network(entry: NetworkEntry, device: str | torch.device) -> Network:
 
     if model.d_model != entry.width:
         raise ValueError(f"{path}: networks.yaml says width {entry.width}, the checkpoint has {model.d_model}")
+    stored = (module.hparams.get("model_config", {}).get("aux_head", {}).get("distribution_matching", {})
+              .get("dataloader_config"))
+    if stored is not None and PurePath(stored).name != entry.dataloader_config:
+        raise ValueError(f"{path}: networks.yaml says dataloader_config {entry.dataloader_config}, the checkpoint "
+                         f"was trained with {PurePath(stored).name}")
     return Network(model=model, module=module)

@@ -3,9 +3,12 @@
 # Model code: https://github.com/pomidori/ShellFlow
 # revision: the commit of the Hugging Face repository, so the same file always loads.
 # width: entries of the residual stream per token.
+# dataloader_config: the ShellFlow dataloader config (in shellflow/config/) the network was trained with; its constants
+# normalise the extra features of the events.
 
 shellflow:
   hf_repo: pomidori73/ShellFlow
   revision: d1b047ac86ef3597998aa533e1dd5ab01e02caee
   file: union_1LMET30_2to4lep/model.ckpt
   width: 128
+  dataloader_config: dataloader_config_06_1LMET30_2to4lep_reduced.yaml

@@ -8,14 +8,20 @@ particle:
     directions: the events for the gradients and the steering vectors.
     steering:   the events we steer and generate.
 
-`load_events` reads them. Each file holds the conditioning (BATCH_KEYS), `event` (the index of the event in the
-combined dataset), `priority` (its position in a seeded random order of the events), and `m_real` (the real-data mass
-of the pair in GeV, float32, the grey line of paper Figs. 3 and 7).
+`load_events` reads them. Each file holds `rows` (the ShellFlow row of each event, see below), the conditioning
+without the extra features (STORED_KEYS), `event` (the index of the event in the combined dataset), `priority` (its
+position in a seeded random order of the events), and `m_real` (the real-data mass of the pair in GeV, float32, the
+grey line of paper Figs. 3 and 7).
 
 A dataset of every final state (pair: null in datasets.yaml, sample C of paper Fig. 4) holds only a steering sample.
 Its events have zero, one, or several particles of each type and no pair. `load_final_states` reads them. The file
-holds the conditioning, `event`, `p4` (the real four-momenta, the grey lines of Fig. 4), and `m_real`, which is NaN
+holds `rows`, STORED_KEYS, `event`, `p4` (the real four-momenta, the grey lines of Fig. 4), and `m_real`, which is NaN
 except in events with exactly one muon pair. It has no priority: the events load in file order.
+
+`rows` holds the bytes ShellFlow's ParticleDataset reads for each event: float32 (E, 2, 266), the raw feature values
+and the packed particle and feature indices. Each network normalises the extra features with the constants of its own
+dataloader config (networks.yaml), so the files hold no `particle_extra`: `particle_extra` builds it per network with
+ShellFlow's normaliser and collator.
 
 Every file comes from Hugging Face at a pinned revision. The events are stored in the order the paper ran them, so the
 batches and their noise seeds match the paper's runs.
@@ -24,17 +30,24 @@ batches and their noise seeds match the paper's runs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import resources
 from typing import Iterator, Literal
 
 import numpy as np
 import torch
+import yaml
 from huggingface_hub import hf_hub_download
+from shellflow.data.particle_dataset import ParticleDataset
+from shellflow.data.particle_vector_collator import ParticleVectorCollator
 
-from shellsteer.config import Classes, DatasetEntry
+from shellsteer.config import Classes, DatasetEntry, NetworkEntry
 
 # A batch holds the event skeleton: types, charges, extra features, mask, and missing momentum.
 # The network generates the kinematics; these keys only condition it.
 BATCH_KEYS = ("particle_type", "particle_charge", "particle_extra", "particle_mask", "met_vector")
+# The keys a file stores as they are; particle_extra comes from `rows`.
+STORED_KEYS = tuple(key for key in BATCH_KEYS if key != "particle_extra")
+PARTICLES = 10                                          # particle slots per event, ShellFlow's max_particles
 
 PAIR_TYPES = {"electron": 11, "muon": 13, "tau": 15}   # ShellFlow's PARTICLE_TYPE_CODES
 # Every particle type of ShellFlow, code -> name: the rows of paper Fig. 14, edited type first in Fig. 4.
@@ -94,8 +107,64 @@ def as_conditioning(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return {**batch, "particle_type": batch["particle_type"].long(), "particle_charge": batch["particle_charge"].long()}
 
 
-def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], n: int) -> Events:
-    """The n events of `sample` with the lowest priority, kept in file order.
+def particle_extra(rows: np.ndarray, dataloader_config: str, batch_size: int = 16384) -> np.ndarray:
+    """(E, 10, 13) float32 extra features of the events in `rows` (float32 (E, 2, 266) ShellFlow rows), normalised
+    with the constants of `dataloader_config`, a file name in shellflow/config/.
+
+    This is ShellFlow's training path: the row split of ParticleDataset.__getitem__, its normaliser, and its collator,
+    `batch_size` events at a time.
+    """
+    if rows.dtype != np.float32 or rows.ndim != 3 or rows.shape[1:] != (2, 266):
+        raise ValueError(f"rows: {rows.dtype} {rows.shape}, expected float32 (E, 2, 266)")
+    path = resources.files("shellflow") / "config" / dataloader_config
+    if not path.is_file():
+        raise ValueError(f"dataloader config {dataloader_config!r} is not in shellflow/config/")
+    normalization = yaml.safe_load(path.read_text())["normalization"]
+    dataset = ParticleDataset.__new__(ParticleDataset)    # __init__ needs the data files; the normaliser does not
+    dataset._setup_normalization({stats["id"]: stats for stats in normalization})
+    collate = ParticleVectorCollator(max_particles=PARTICLES)
+    extra = np.empty((len(rows), PARTICLES, 13), np.float32)
+    for start in range(0, len(rows), batch_size):
+        part = rows[start:start + batch_size]
+        features = torch.from_numpy(part[:, 0, 2:].copy())
+        packed = torch.from_numpy(part[:, 1, 2:].copy()).long()
+        particle_idxs, feature_idxs = packed // 1000, packed % 1000
+        features = dataset._normalize_features(features, feature_idxs)
+        items = [{"features": f, "particle_idxs": p, "feature_idxs": i}
+                 for f, p, i in zip(features, particle_idxs, feature_idxs)]
+        extra[start:start + len(part)] = collate(items)["particle_extra"].numpy()
+    return extra
+
+
+def read_extra(data, path: str, keep: np.ndarray, dataloader_config: str, batch_size: int = 16384) -> np.ndarray:
+    """(len(keep), 10, 13) particle_extra of the events `keep` (sorted row numbers) of the open file `data`.
+
+    A compressed file cannot be memory-mapped, so this streams `rows` in blocks of `batch_size` events and keeps only
+    the `particle_extra` of the needed events. The rows of the whole file (2.2 GB) are never in memory at once.
+    """
+    with data.zip.open("rows.npy") as file:
+        version = np.lib.format.read_magic(file)
+        read_header = {(1, 0): np.lib.format.read_array_header_1_0, (2, 0): np.lib.format.read_array_header_2_0}
+        shape, fortran, dtype = read_header[version](file)
+        if dtype != np.float32 or fortran or len(shape) != 3 or shape[1:] != (2, 266):
+            raise ValueError(f"{path}: rows is {dtype} {shape}, expected float32 (E, 2, 266) in C order")
+        if len(keep) and keep[-1] >= shape[0]:
+            raise ValueError(f"{path}: rows holds {shape[0]} events, the file has more")
+        extra = np.empty((len(keep), PARTICLES, 13), np.float32)
+        done, row_bytes = 0, 2 * 266 * 4
+        for start in range(0, int(keep[-1]) + 1 if len(keep) else 0, batch_size):
+            count = min(batch_size, shape[0] - start)
+            block = np.frombuffer(file.read(count * row_bytes), np.float32).reshape(count, 2, 266)
+            wanted = keep[done:np.searchsorted(keep, start + count)]
+            extra[done:done + len(wanted)] = particle_extra(block[wanted - start], dataloader_config, batch_size)
+            done += len(wanted)
+            del block
+    return extra
+
+
+def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], n: int,
+                network: NetworkEntry) -> Events:
+    """The n events of `sample` with the lowest priority, kept in file order, with the extra features of `network`.
 
     The files are sorted by physics sample, so the first n events are not a random choice; the lowest priorities are.
     With n equal to the size of the file, every event loads in the order of the file.
@@ -103,12 +172,13 @@ def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], 
     if entry.pair is None:
         raise ValueError(f"the dataset {entry.files.steering!r} has no pairs (pair: null); read it with "
                          f"load_final_states")
-    keys = {*BATCH_KEYS, "event", "priority", "m_real"}
+    keys = {*STORED_KEYS, "rows", "event", "priority", "m_real"}
     path = download(entry, sample)
     with np.load(path) as data:
         check_file(path, data, keys, entry, n)
         keep = np.sort(np.argsort(data["priority"], kind="stable")[:n])
-        batch = {key: torch.from_numpy(data[key][keep]) for key in BATCH_KEYS}
+        extra = read_extra(data, path, keep, network.dataloader_config)
+        batch = {key: torch.from_numpy(extra if key == "particle_extra" else data[key][keep]) for key in BATCH_KEYS}
         event, priority, m_real = data["event"][keep], data["priority"][keep], data["m_real"][keep]
     if m_real.dtype != np.float32:
         raise ValueError(f"{path}: m_real is {m_real.dtype}, expected float32")
@@ -117,19 +187,21 @@ def load_events(entry: DatasetEntry, sample: Literal["directions", "steering"], 
     return Events(batch=batch, minus=minus, plus=plus, event=event, priority=priority, m_real=m_real)
 
 
-def load_final_states(entry: DatasetEntry, n: int) -> FinalStates:
-    """The first n events of a dataset of every final state (pair: null), in file order.
+def load_final_states(entry: DatasetEntry, n: int, network: NetworkEntry) -> FinalStates:
+    """The first n events of a dataset of every final state (pair: null), in file order, with the extra features of
+    `network`.
 
     The file has no priority, so the first n events are the first n of the file, which is sorted by physics sample;
     only n equal to the size of the file gives the paper's sample.
     """
     if entry.pair is not None:
         raise ValueError(f"the dataset {entry.files.steering!r} holds {entry.pair} pairs; read it with load_events")
-    keys = {*BATCH_KEYS, "event", "p4", "m_real"}
+    keys = {*STORED_KEYS, "rows", "event", "p4", "m_real"}
     path = download(entry, "steering")
     with np.load(path) as data:
         check_file(path, data, keys, entry, n)
-        batch = {key: torch.from_numpy(data[key][:n]) for key in BATCH_KEYS}
+        extra = read_extra(data, path, np.arange(n), network.dataloader_config)
+        batch = {key: torch.from_numpy(extra if key == "particle_extra" else data[key][:n]) for key in BATCH_KEYS}
         event, p4, m_real = data["event"][:n], data["p4"][:n], data["m_real"][:n]
     for name, array in (("p4", p4), ("m_real", m_real)):
         if array.dtype != np.float32:

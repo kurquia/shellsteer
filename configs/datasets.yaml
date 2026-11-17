@@ -6,7 +6,7 @@
 
 validation_muon_pairs:
   hf_repo: kurquia/shellsteer-events
-  revision: ed05bb9ac082d25ce67a0578a819b4eb15d89434
+  revision: 398b8616aa518f8aadc9fc41aea38961400742b9
   files:
     directions: directions-dataset.npz
     steering: steering-dataset.npz
@@ -18,7 +18,7 @@ validation_muon_pairs:
 # the real four-momenta p4 of every particle; m_real is NaN except in events with exactly one muon pair.
 validation_all_final_states:
   hf_repo: kurquia/shellsteer-events
-  revision: ed05bb9ac082d25ce67a0578a819b4eb15d89434
+  revision: 398b8616aa518f8aadc9fc41aea38961400742b9
   files:
     steering: all-final-states-dataset.npz
   pair: null
