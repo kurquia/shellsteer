@@ -174,7 +174,7 @@ The gradient pass adds about one hour to a run that does not start from `vectors
 | `main_z_block1.yaml` | Sec. 5, Fig. 3 | 5 | 70 min from the shipped vectors |
 | `main_z_block1.yaml` with the Fig. 5 overrides of the [next section](#change-settings-with---set) | Sec. 5.1, Fig. 5 | 39 | 9 h from the shipped vectors |
 | `ablation_z.yaml` | Sec. 5.3, Fig. 7 | 6, plus 2 passes without edits for the mean of Eq. 25 | about 1.9 h from the shipped vectors, 2.6 h with the gradient pass |
-| `all_muons.yaml` | Sec. 5.1, Fig. 4; App. D.1, Fig. 14 | 5 | about 70 min, plus the gradient pass (TODO: check `from_file` after the merge) |
+| `all_muons.yaml` | Sec. 5.1, Fig. 4; App. D.1, Fig. 14 | 5 | about 70 min from the shipped vectors |
 | `methods_z_fisher.yaml` | App. B, Figs. 9 and 10 | 27 | about 6.3 h, plus the gradient pass |
 | `methods_z_meandiff.yaml` | App. B, Figs. 8 and 10 | 21 | about 4.9 h, plus the gradient pass |
 | `blocks_z_block0.yaml`, `blocks_z_block3.yaml` | App. D.2, Figs. 15 and 16 | 39 each | about 9 h each, plus the gradient pass |
