@@ -49,7 +49,9 @@ steering:
   seeds: [2041]                     # the paper ran sample C with one seed
 
 # The kinematics of every particle type (Figs. 4 and 14): counts of p_T, eta, phi, and E for real data, the baseline,
-# and each alpha, and the largest change per bin that Sec. 5.1 and App. D.1 quote.
+# and each alpha, and the largest change per bin that Sec. 5.1 and App. D.1 quote. Fig. 14 adds the mass m of jets,
+# large-R jets, and hadronic taus: the decoded mass of the generated files, and the real-data mass from the `rows` of
+# the event file. The largest change of App. D.1 (2.4%) leaves m out, as the paper.
 kinematics:
   bins: 60                          # per panel: equal in log for p_T and E, equal in eta and phi
   readout_min_baseline: 1000        # the largest change per bin counts bins with at least this many baseline particles

@@ -16,8 +16,8 @@ seed and alpha. Each generation is one file:
 
 A steering sample of every final state (paper Fig. 4) has no pairs and no class selection. `generate_events` edits
 every particle of the edited type (tokens all_of_type) and keeps the four-momenta, types, charges, and mask of every
-particle of every event. `save_generated_events` writes them to the same generated_path, one file per seed and alpha;
-there is no kept.npz.
+particle of every event, and the decoder's mass of each jet, large-R jet, and hadronic tau (Fig. 14).
+`save_generated_events` writes them to the same generated_path, one file per seed and alpha; there is no kept.npz.
 
 The mean ablation (paper Sec. 5.3) is the edit `Ablation`; its c_k come from `activation_means.mean_projection`.
 It runs on the sample of the config's `ablation.sample` (the directions sample in the paper), so its baseline is
@@ -90,6 +90,8 @@ class GeneratedEvents:
     particle_mask: np.ndarray    # (E, N) bool, True on real particles
     event: np.ndarray            # (E,) index of the event in the combined dataset
     nans: NanCounts | None = None   # as in GeneratedPairs, without the pair-mass column
+    mass: np.ndarray | None = None  # (E, N) float32 sampler.decoded_mass in GeV, NaN on massless types and padding;
+                                    # None for a file written before shellsteer stored it
 
 
 def check_edit(edit: Edit | Ablation, steps: int, width: int) -> None:
@@ -157,8 +159,8 @@ def generate_events(workers: Workers, events: FinalStates, edit: Edit | None, *,
     The edit adds alpha xi^- to every negative and alpha xi^+ to every positive particle of type `edit.pair`, so it
     needs tokens all_of_type; an event without such a particle is generated as without the edit. Batch i holds events
     i x batch_size to (i + 1) x batch_size - 1 in file order and starts from the noise of batch_seed(seed, i), as in
-    `generate_pairs`; `workers.map` runs it on one of its devices and returns the batches in order, so the four-momenta
-    and the NaN counts per event are in file order and equal those of one device of the same type.
+    `generate_pairs`; `workers.map` runs it on one of its devices and returns the batches in order, so the four-momenta,
+    the masses, and the NaN counts per event are in file order and equal those of one device of the same type.
     """
     if edit is not None:
         if not isinstance(edit, Edit) or edit.tokens != "all_of_type":
@@ -166,7 +168,7 @@ def generate_events(workers: Workers, events: FinalStates, edit: Edit | None, *,
                              f"{getattr(edit, 'tokens', type(edit).__name__)!r}")
         check_edit(edit, steps, workers.width)
 
-    def one_batch(index: int, network: Network, device: torch.device) -> tuple[np.ndarray, np.ndarray]:
+    def one_batch(index: int, network: Network, device: torch.device) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         batch = final_state_batch_at(events, index, batch_size, device)
         state = prior(network, batch, batch_seed(seed, index))
         settings = dict(on_nan=on_nan, label=f"batch {index} of seed {seed}")
@@ -177,13 +179,15 @@ def generate_events(workers: Workers, events: FinalStates, edit: Edit | None, *,
                          norm_restore=edit.norm_restore)
             with attach(network, edit.block, hook):
                 generated = generate(network, batch, state, steps, on_step=on_step(hook), **settings)
-        return generated.four_momenta.cpu().numpy(), NanCounts.of_batch(generated, None)
+        return (generated.four_momenta.cpu().numpy(), generated.mass.float().cpu().numpy(),
+                NanCounts.of_batch(generated, None))
 
-    four_momenta, nans = [], []
-    for batch_four_momenta, counts in workers.map(batch_count(events, batch_size), one_batch):
+    four_momenta, masses, nans = [], [], []
+    for batch_four_momenta, mass, counts in workers.map(batch_count(events, batch_size), one_batch):
         four_momenta.append(batch_four_momenta)
+        masses.append(mass)
         nans.append(counts)
-    return GeneratedEvents(four_momenta=np.concatenate(four_momenta),
+    return GeneratedEvents(four_momenta=np.concatenate(four_momenta), mass=np.concatenate(masses),
                            particle_type=events.batch["particle_type"].numpy().astype(np.int16),
                            particle_charge=events.batch["particle_charge"].numpy().astype(np.int16),
                            particle_mask=events.batch["particle_mask"].numpy() > 0.5, event=events.event,
@@ -242,8 +246,8 @@ def load_generated(path: str | Path) -> tuple[GeneratedPairs, dict]:
 
 
 def save_generated_events(path: str | Path, generated: GeneratedEvents, metadata: dict) -> None:
-    """Write every particle of `generated` and the settings that made it to one .npz, as `save_generated` does for
-    pairs; metadata must hold every key of METADATA_KEYS."""
+    """Write every particle of `generated`, its decoded mass if any, and the settings that made it to one .npz, as
+    `save_generated` does for pairs; metadata must hold every key of METADATA_KEYS."""
     missing = [key for key in METADATA_KEYS if key not in metadata]
     if missing:
         raise ValueError(f"metadata has no {missing}")
@@ -251,19 +255,22 @@ def save_generated_events(path: str | Path, generated: GeneratedEvents, metadata
         metadata = {**metadata, "NaN counts": generated.nans.metadata()}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    mass = {} if generated.mass is None else {"decoded_mass": generated.mass}   # "mass": pair mass, load_generated
     np.savez(path, **{"four-momenta": generated.four_momenta, "particle_type": generated.particle_type,
                       "particle_charge": generated.particle_charge, "particle_mask": generated.particle_mask,
-                      "event": generated.event, "metadata": np.array(json.dumps(metadata, indent=1))})
+                      "event": generated.event, **mass, "metadata": np.array(json.dumps(metadata, indent=1))})
 
 
 def load_generated_events(path: str | Path) -> tuple[GeneratedEvents, dict]:
-    """The particles and the settings from `save_generated_events`; stops on a file of pairs."""
+    """The particles and the settings from `save_generated_events`; stops on a file of pairs. `mass` is None for a file
+    without decoded masses."""
     with np.load(path) as data:
         if "particle_type" not in data.files:
             raise ValueError(f"{path} holds pairs, not every particle of each event; read it with load_generated")
         generated = GeneratedEvents(four_momenta=data["four-momenta"], particle_type=data["particle_type"],
                                     particle_charge=data["particle_charge"], particle_mask=data["particle_mask"],
-                                    event=data["event"])
+                                    event=data["event"],
+                                    mass=data["decoded_mass"] if "decoded_mass" in data.files else None)
         metadata = json.loads(str(data["metadata"]))
     return generated, metadata
 

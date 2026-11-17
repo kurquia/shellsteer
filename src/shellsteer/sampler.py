@@ -1,7 +1,8 @@
 """Generate events with the Euler sampler of ShellFlow.
 
 Flow time runs from t = 0 (noise) to t = 1 (data). `prior` draws the state at t = 0 from a seed. `generate`
-integrates it to t = 1 in `steps` Euler steps and decodes the result to four-momenta.
+integrates it to t = 1 in `steps` Euler steps and decodes the result to four-momenta. `decoded_mass` is the mass the
+decode builds each jet, large-R jet, and hadronic tau from (paper Fig. 14).
 
 ShellFlow's sampler sets every NaN coordinate of the final state to 0 before the decode. `generate` counts these NaNs
 per event, and the NaN entries of the decoded four-momenta, and returns the counts with the four-momenta. A NaN that
@@ -39,6 +40,7 @@ class Generated(NamedTuple):
     nan_state: torch.Tensor         # (B,) int64 NaN coordinates of the final state per event, padding slots included,
                                     # counted before they are set to 0
     nan_four_momenta: torch.Tensor  # (B,) int64 NaN entries of the four-momenta per event, after the decode
+    mass: torch.Tensor              # (B, N) float32 `decoded_mass` in GeV: NaN on massless types and padding
 
 
 @dataclass(frozen=True)
@@ -114,8 +116,8 @@ def prior(network: Network, batch: dict[str, torch.Tensor], seed: int) -> torch.
 def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tensor, steps: int, *,
              on_nan: OnNan = "set_to_zero", label: str = "the batch", grad: bool = False,
              on_step: Callable[[int], None] | None = None) -> Generated:
-    """Integrate `state` from t = 0 to t = 1; return the four-momenta (px, py, pz, E) in GeV, shape (B, N, 4), and
-    the NaN counts of each event.
+    """Integrate `state` from t = 0 to t = 1; return the four-momenta (px, py, pz, E) in GeV, shape (B, N, 4), the
+    NaN counts of each event, and the decoder's mass of each particle of a massive type.
 
     on_nan: "set_to_zero" sets NaN coordinates of the final state to 0 before the decode, as ShellFlow's sampler;
         "stop" raises NanError, naming `label` and the counts, if the final state or the four-momenta hold a NaN.
@@ -164,7 +166,8 @@ def generate(network: Network, batch: dict[str, torch.Tensor], state: torch.Tens
         if on_nan == "stop" and bool(nan_four_momenta.any()):
             raise NanError(f"{label}: {int(nan_four_momenta.sum()):,} NaN entries in the four-momenta of "
                            f"{int((nan_four_momenta > 0).sum()):,} of {b:,} events (sampler.on_nan is stop)")
-        return Generated(four_momenta, nan_state, nan_four_momenta)
+        mass = decoded_mass(model, state.detach(), batch["particle_type"], batch["particle_mask"])
+        return Generated(four_momenta, nan_state, nan_four_momenta, mass)
 
 
 def decode(model: torch.nn.Module, state: torch.Tensor, p_type: torch.Tensor, p_mask: torch.Tensor,
@@ -200,3 +203,19 @@ def decode(model: torch.nn.Module, state: torch.Tensor, p_type: torch.Tensor, p_
     four = torch.cat([energy.unsqueeze(-1), momentum], dim=-1)
     real = ((is_massless | is_massive) & active).unsqueeze(-1)
     return minkowski_to_collator(torch.where(real, four, torch.zeros_like(four)))
+
+
+def decoded_mass(model: torch.nn.Module, state: torch.Tensor, p_type: torch.Tensor, p_mask: torch.Tensor
+                 ) -> torch.Tensor:
+    """(B, N) mass m = exp(s4 sigma + mu) in GeV that `decode` builds a massive particle from, with the same clamps;
+    NaN on massless types and padding.
+
+    The mass column of paper Fig. 14 shows it for jets, large-R jets, and hadronic taus. sqrt(E^2 - |p|^2) of the
+    float32 four-momenta loses the mass of a light, boosted particle, such as a hadronic tau, to cancellation.
+    """
+    type_idx = model.map_type_to_idx(p_type)
+    logm_mu = model._logm_mu_lut[type_idx]
+    logm_sigma = model._logm_sigma_lut[type_idx].clamp(min=0.01)
+    mass = torch.exp((state[..., 4] * logm_sigma + logm_mu).clamp(-10, 10))
+    massive = model._is_massive_lut[type_idx] & (p_mask > 0.5)
+    return torch.where(massive, mass, torch.full_like(mass, float("nan")))

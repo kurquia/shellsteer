@@ -121,11 +121,11 @@ The stages of the steering chain write these files to `runs/<name>/`:
 | `plots` | Draws the steered spectrum (Fig. 3), the selectivity curve, and the pole and width against $\alpha$ (Fig. 5) | `plots/*.pdf` | CPU |
 
 The kinematics chain (`all_muons.yaml`) runs `gradients`, `steering-vectors`, and `generate` as above, then two stages of its own.
-Its `generate` stage keeps every particle of each event and writes no `generated/kept.npz`.
+Its `generate` stage keeps every particle of each event, with the decoded mass of each jet, large-R jet, and hadronic tau, and writes no `generated/kept.npz`.
 
 | Stage | What it does | Writes | Device |
 |---|---|---|---|
-| `kinematics-readout` | Counts $p_T$, $\eta$, $\phi$, and $E$ of every particle type for real data, the baseline, and each $\alpha$, and finds the largest change per bin | `kinematics.npz`, `kinematics_readout.json` | CPU |
+| `kinematics-readout` | Counts $p_T$, $\eta$, $\phi$, and $E$ of every particle type, and the mass $m$ of jets, large-R jets, and hadronic taus, for real data, the baseline, and each $\alpha$, and finds the largest change per bin | `kinematics.npz`, `kinematics_readout.json` | CPU |
 | `kinematics-plots` | Draws the kinematics of the edited muons (Fig. 4) and of every other particle type (Fig. 14) | `plots/kinematics.pdf`, `plots/all_particles.pdf` | CPU |
 
 The mean-ablation chain (`ablation_z.yaml`) runs `gradients` and `steering-vectors` as above, then four stages of its own.
@@ -198,8 +198,13 @@ The gradient pass adds about one hour to a run that does not start from `vectors
 
 TODO: App. C, the steering of `ShellFlow-B` and `ShellGATr`, has no config yet.
 
-Fig. 14 of the paper also shows the mass of jets, large-R jets, and hadronic taus.
-`all_muons.yaml` draws every other column of Fig. 14 but not the mass column.
+Fig. 14 of the paper also shows the mass $m$ of jets, large-R jets, and hadronic taus.
+The float32 four-momenta do not give this mass for a hadronic tau, which is below 1 GeV: $E^2 - |\vec p|^2$ cancels.
+So the generated mass is the mass that the decoder of `ShellFlow` builds each particle from, which `steer generate` stores in the generated files.
+The real-data mass is $\sqrt{E^2 - (p_T \cosh\eta)^2}$ in float64, from $p_T$, $\eta$, and $E$ as the dataset stores them, in the `rows` key of the event file.
+If the generated files or the event file lack these masses, `kinematics-readout` logs what is missing, and Fig. 14 has no mass column.
+The 2.4% of App. D.1, the largest change per bin of the other particle types, uses $p_T$, $\eta$, $\phi$, and $E$ only, as in the paper.
+`kinematics_readout.json` lists the largest change of $m$ on its own.
 
 ### Change settings with `--set`
 
