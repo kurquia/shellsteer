@@ -60,8 +60,8 @@ The package needs Python 3.13 or later and [uv](https://docs.astral.sh/uv/).
 The network code comes from [pomidori/ShellFlow](https://github.com/pomidori/ShellFlow) at commit `8ddbfe3`, pinned in `pyproject.toml`.
 
 ```bash
-git clone TODO-repository-url
-cd TODO-repository-name
+git clone https://github.com/kurquia/shellsteer.git
+cd shellsteer
 uv sync
 source .venv/bin/activate
 ```
