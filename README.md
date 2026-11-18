@@ -1,6 +1,6 @@
 <div align="center">
 
-# Who Moved My Z boson? Revealing Resonant Features Inside A Neural Network
+# Who Moved My Z Boson? Revealing Resonance Features Inside a Neural Network
 
 [![arXiv](https://img.shields.io/badge/arXiv-TODO-b31b1b.svg)](https://arxiv.org/abs/TODO)
 [![Models](https://img.shields.io/badge/🤗%20Models-pomidori73%2FShellFlow-ffd21e)](https://huggingface.co/pomidori73/ShellFlow)
@@ -354,7 +354,7 @@ If you use this code, cite the paper (TODO: arXiv id and authors):
 
 ```bibtex
 @article{TODO,
-  title         = {Who Moved My {$Z$} boson? Revealing Resonant Features Inside A Neural Network},
+  title         = {Who Moved My {$Z$} Boson? Revealing Resonance Features Inside a Neural Network},
   author        = {TODO},
   year          = {2026},
   eprint        = {TODO},
