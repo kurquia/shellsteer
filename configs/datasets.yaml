@@ -13,6 +13,18 @@ validation_muon_pairs:
   pair: muon                     # muon | electron | tau
   events: 1040000
 
+# Paper App. C: the samples of ShellFlow-B and ShellGATr, 1,040,000 events each with one muon pair from the validation
+# events of the 2to4lep selection, in the paper's order and with its priority (default_rng(2030)). The rows are 161
+# long, the row length of the 2to4lep dataset.
+validation_muon_pairs_2to4lep:
+  hf_repo: kurquia/shellsteer-events
+  revision: 7bb8c5e61ab8254dc332dd79a5491efd19b03a7f
+  files:
+    directions: 2to4lep-directions-dataset.npz
+    steering: 2to4lep-steering-dataset.npz
+  pair: muon
+  events: 1040000
+
 # Sample C of paper Fig. 4: 1,000,000 validation events of every final state, with zero, one, or several muons. It has
 # no pairs (pair: null), so no directions sample and no priority; every event is used, in file order. The file holds
 # the real four-momenta p4 of every particle; m_real is NaN except in events with exactly one muon pair.

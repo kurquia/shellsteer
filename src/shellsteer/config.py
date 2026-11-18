@@ -158,7 +158,7 @@ class Plots(Section):
 
 class Config(Section):
     name: str
-    network: Literal["shellflow"]
+    network: str                     # a network of the networks file: shellflow, shellflow_b, or shellgatr
     networks: dict[str, NetworkEntry]
     datasets: dict[str, DatasetEntry]
     classes: Classes

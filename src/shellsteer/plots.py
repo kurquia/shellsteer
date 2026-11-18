@@ -3,6 +3,7 @@
 steered_spectrum_figure  Fig. 3: baseline, each alpha, and real data on log axes, the ratio below, and zooms.
 selectivity_figure       R_60 against the target shift, one curve per method (numbers in App. B; no paper figure).
 pole_and_width_figure    Fig. 5: fitted pole M and width Gamma of the target against alpha, with the prediction.
+networks_pole_and_width_figure  Fig. 13 (App. C): the same for several runs, such as the three networks, in one figure.
 ablation_figure          Fig. 7: baseline, mean ablation, and real data on log axes, an inset of the target peak, the
                          ratio below.
 kinematics_figure        Fig. 4: p_T, eta, and phi of the edited particle type, each with its ratio panel.
@@ -35,6 +36,7 @@ STYLE_FILE = Path(__file__).with_name("paper.mplstyle")
 TEXT_WIDTH = 6.75                           # inches, \textwidth of the paper
 COLUMN_WIDTH = 3.25                         # inches, one column
 POLE_AND_WIDTH_WIDTH = 0.45 * TEXT_WIDTH    # main.tex includes Fig. 5 at 0.45 \textwidth
+NETWORKS_POLE_AND_WIDTH_HEIGHT = 2.6        # inches, Fig. 13 before cropping, drawn at POLE_AND_WIDTH_WIDTH
 PAD = 0.02                                  # inches of white space around the contents of a saved figure
 
 CURVE_LINE_WIDTH = 1.25                     # lines through points
@@ -52,6 +54,8 @@ PREDICTION_COLOR = "0.55"
 # One colour per curve of the selectivity figure, in the order of the curves: FKT, Fisher, and difference of means
 # in the paper's App. B, then the colours of blocks 0 and 3 in App. D.
 CURVE_COLORS = ("darkred", "#1f4e9c", "#e69f00", "#26ad81", "#43a2ca")
+# One colour per run of Fig. 13 (App. C), in legend order: ShellFlow, ShellFlow-B, ShellGATr.
+NETWORK_COLORS = ("#D55E00", "#26ad81", "#43a2ca")
 
 SELECTIVITY_KEYS = ("alpha", "target shift", "target shift std", "R_60", "R_60 std")
 
@@ -408,6 +412,53 @@ def selectivity_figure(curves: dict[str, dict[str, ArrayLike]], *, target_label:
 
 # ---------------------------------------------------------------- Fig. 5: pole and width
 
+def pole_and_width_columns(alpha: ArrayLike, pole: ArrayLike, pole_std: ArrayLike, width: ArrayLike,
+                           width_std: ArrayLike, first_order_log_slope: float | None, where: str
+                           ) -> dict[str, np.ndarray]:
+    """The checked columns of one series of pole and width against alpha, sorted by alpha; stops on a repeated alpha,
+    on a series without exactly one alpha 0, or on a non-finite slope."""
+    columns = as_columns({"alpha": alpha, "pole": pole, "pole std": pole_std, "width": width,
+                          "width std": width_std}, where)
+    check_alphas(columns["alpha"], where)
+    if np.count_nonzero(columns["alpha"] == 0) != 1:
+        raise ValueError(f"{where}: expected one alpha 0 for the baseline fit, got alphas {columns['alpha']}")
+    if first_order_log_slope is not None and not np.isfinite(first_order_log_slope):
+        raise ValueError(f"{where}: first_order_log_slope: expected a finite number or None, got "
+                         f"{first_order_log_slope}")
+    order = np.argsort(columns["alpha"])
+    return {key: column[order] for key, column in columns.items()}
+
+
+def draw_pole_and_width(pole_panel: Axes, width_panel: Axes, columns: dict[str, np.ndarray],
+                        first_order_log_slope: float | None, *, color: str, prediction_color: str,
+                        label: str | None = None, zorder: float | None = None) -> None:
+    """One series in both panels: the fitted values with their seed spread, and, with S, the dotted value at alpha 0
+    times exp(alpha S) from the smallest to the largest alpha."""
+    alphas = columns["alpha"]
+    order = {} if zorder is None else {"zorder": zorder}
+    for axes, key in ((pole_panel, "pole"), (width_panel, "width")):
+        axes.errorbar(alphas, columns[key], yerr=columns[f"{key} std"], color=color, linestyle="-", marker="o",
+                      markersize=2.5, linewidth=CURVE_LINE_WIDTH, capsize=1.2, elinewidth=0.8, label=label, **order)
+        if first_order_log_slope is not None:
+            line = np.linspace(alphas[0], alphas[-1], 121)
+            at_zero = columns[key][alphas == 0][0]
+            axes.plot(line, at_zero * np.exp(first_order_log_slope * line), color=prediction_color,
+                      linewidth=PREDICTION_LINE_WIDTH, linestyle=":", **({} if zorder is None else {"zorder": 3}))
+
+
+def finish_pole_and_width(figure: Figure, pole_panel: Axes, width_panel: Axes) -> None:
+    """Axis labels, room above the width panel for its label, the panel labels (a) and (b), and the layout."""
+    pole_panel.set_ylabel(r"pole mass, $M$ [GeV]")
+    width_panel.set_ylabel(r"width, $\Gamma$ [GeV]")
+    width_panel.set_xlabel(r"coefficient, $\alpha$")
+    low, high = width_panel.get_ylim()
+    width_panel.set_ylim(low, high + 0.15 * (high - low))       # room for the panel label above the first point
+    for axes, letter in ((pole_panel, "a"), (width_panel, "b")):
+        axes.text(0.03, 0.95, f"({letter})", transform=axes.transAxes, va="top", ha="left")
+    figure.align_ylabels((pole_panel, width_panel))
+    figure.tight_layout()
+
+
 def pole_and_width_figure(alpha: ArrayLike, pole: ArrayLike, pole_std: ArrayLike, width: ArrayLike,
                           width_std: ArrayLike, *, first_order_log_slope: float | None) -> Figure:
     """Fig. 5 of the paper: (a) the fitted pole M and (b) the fitted width Gamma of the target against alpha.
@@ -418,37 +469,47 @@ def pole_and_width_figure(alpha: ArrayLike, pole: ArrayLike, pole_std: ArrayLike
     (0.122 in the paper). With S, a dotted line in each panel shows the value at alpha 0 times exp(alpha S). None
     draws no dotted line.
     """
-    columns = as_columns({"alpha": alpha, "pole": pole, "pole std": pole_std, "width": width,
-                          "width std": width_std}, "pole_and_width_figure")
-    check_alphas(columns["alpha"], "alpha")
-    if np.count_nonzero(columns["alpha"] == 0) != 1:
-        raise ValueError(f"alpha: expected one alpha 0 for the baseline fit, got alphas {columns['alpha']}")
-    if first_order_log_slope is not None and not np.isfinite(first_order_log_slope):
-        raise ValueError(f"first_order_log_slope: expected a finite number or None, got {first_order_log_slope}")
-    order = np.argsort(columns["alpha"])
-    columns = {key: column[order] for key, column in columns.items()}
-    alphas = columns["alpha"]
-
+    columns = pole_and_width_columns(alpha, pole, pole_std, width, width_std, first_order_log_slope,
+                                     "pole_and_width_figure")
     with style.context(STYLE_FILE):
         figure = Figure(figsize=(POLE_AND_WIDTH_WIDTH, 3.2))
         pole_panel, width_panel = figure.subplots(2, 1, sharex=True)
-        for axes, key in ((pole_panel, "pole"), (width_panel, "width")):
-            axes.errorbar(alphas, columns[key], yerr=columns[f"{key} std"], color=POINT_COLOR, linestyle="-",
-                          marker="o", markersize=2.5, linewidth=CURVE_LINE_WIDTH, capsize=1.2, elinewidth=0.8)
-            if first_order_log_slope is not None:
-                line = np.linspace(alphas[0], alphas[-1], 121)
-                at_zero = columns[key][alphas == 0][0]
-                axes.plot(line, at_zero * np.exp(first_order_log_slope * line), color=PREDICTION_COLOR,
-                          linewidth=PREDICTION_LINE_WIDTH, linestyle=":")
-        pole_panel.set_ylabel(r"pole mass, $M$ [GeV]")
-        width_panel.set_ylabel(r"width, $\Gamma$ [GeV]")
-        width_panel.set_xlabel(r"coefficient, $\alpha$")
-        low, high = width_panel.get_ylim()
-        width_panel.set_ylim(low, high + 0.15 * (high - low))       # room for the panel label above the first point
-        for axes, letter in ((pole_panel, "a"), (width_panel, "b")):
-            axes.text(0.03, 0.95, f"({letter})", transform=axes.transAxes, va="top", ha="left")
-        figure.align_ylabels((pole_panel, width_panel))
-        figure.tight_layout()
+        draw_pole_and_width(pole_panel, width_panel, columns, first_order_log_slope, color=POINT_COLOR,
+                            prediction_color=PREDICTION_COLOR)
+        finish_pole_and_width(figure, pole_panel, width_panel)
+        fit_to_width(figure, POLE_AND_WIDTH_WIDTH)
+    return figure
+
+
+def networks_pole_and_width_figure(series: dict[str, dict[str, ArrayLike]],
+                                   first_order_log_slopes: dict[str, float | None]) -> Figure:
+    """Fig. 13 of the paper (App. C): pole M and width Gamma against alpha of several runs, such as the Z vector at
+    block 1 of the three networks, in one figure.
+
+    series: legend label -> {"alpha", "pole", "pole std", "width", "width std"}, each run as `pole_and_width_figure`
+    takes it, in legend order. The colours are NETWORK_COLORS in that order, and the first series is drawn in front.
+    first_order_log_slopes: label -> S of the run, or None; with S, a dotted line in the series' colour shows its value
+    at alpha 0 times exp(alpha S).
+    """
+    if not 1 <= len(series) <= len(NETWORK_COLORS):
+        raise ValueError(f"series: expected 1 to {len(NETWORK_COLORS)} runs, got {len(series)}")
+    if set(first_order_log_slopes) != set(series):
+        raise ValueError(f"first_order_log_slopes: expected the labels {list(series)}, got {list(first_order_log_slopes)}")
+    columns = {label: pole_and_width_columns(**{key.replace(" ", "_"): value for key, value in data.items()},
+                                             first_order_log_slope=first_order_log_slopes[label], where=label)
+               for label, data in series.items()}
+    with style.context(STYLE_FILE):
+        figure = Figure(figsize=(POLE_AND_WIDTH_WIDTH, NETWORKS_POLE_AND_WIDTH_HEIGHT))
+        pole_panel, width_panel = figure.subplots(2, 1, sharex=True)
+        drawn = list(zip(columns, NETWORK_COLORS))
+        for rank, (label, color) in [*enumerate(drawn)][1:] + [(0, drawn[0])]:     # the first series last, in front
+            draw_pole_and_width(pole_panel, width_panel, columns[label], first_order_log_slopes[label], color=color,
+                                prediction_color=color, label=label, zorder=6 if rank == 0 else 5)
+        handles, labels = pole_panel.get_legend_handles_labels()
+        order = [labels.index(label) for label in columns]
+        pole_panel.legend([handles[i] for i in order], [labels[i] for i in order], loc="upper left",
+                          bbox_to_anchor=(0.0, 0.87), fontsize=6.5, handlelength=1.6, frameon=False)
+        finish_pole_and_width(figure, pole_panel, width_panel)
         fit_to_width(figure, POLE_AND_WIDTH_WIDTH)
     return figure
 

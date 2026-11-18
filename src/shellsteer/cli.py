@@ -42,8 +42,8 @@ from shellsteer.activation_means import (activation_means, load_activation_means
 from shellsteer.config import Config, load_config
 from shellsteer.devices import (DeviceError, Devices, Workers, describe_devices, devices_metadata, load_workers,
                                 parse_devices)
-from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, class_names, class_of, final_state_rows, load_events,
-                               load_final_states, select, tokens_of_type)
+from shellsteer.events import (PAIR_TYPES, PARTICLE_TYPES, NotUploadedError, class_names, class_of, final_state_rows,
+                               load_events, load_final_states, select, tokens_of_type)
 from shellsteer.gradients import gradient_moments, load_moments, save_moments
 from shellsteer.kinematics import (MASS, MASSIVE_TYPES, VARIABLES, largest_changes, load_panels, mass_panels, real_mass,
                                    save_panels, type_masks, type_panels)
@@ -57,9 +57,11 @@ from shellsteer.steered_generation import (ABLATION_METADATA_KEYS, Ablation, Edi
                                            generate_pairs, generated_path, kept_path, load_generated,
                                            load_generated_events, load_kept, save_generated, save_generated_events,
                                            save_kept)
-from shellsteer.steering_vectors import (check_steering_vectors_file, gradient_response,
-                                        gradient_responses_per_step, load_gradient_response_per_step,
-                                        load_steering_vector, save_steering_vectors, steering_vectors)
+from shellsteer.steering_vectors import (ALIGNMENT_KEY, EIGENVALUE_KEY, alignment_per_step,
+                                        alignments_per_step, check_steering_vectors_file, gradient_response,
+                                        gradient_responses_per_step, load_gradient_response_per_step, load_per_step,
+                                        load_steering_vector, save_steering_vectors, steering_vector_and_eigenvalue,
+                                        steering_vectors_and_eigenvalues)
 
 CONFIG_FILE = "config.yaml"
 MOMENTS_FILE = "gradient_moments.npz"
@@ -254,20 +256,27 @@ def run_steering_vectors(config: Config, run: Path, devices: Devices) -> None:
         log(stage, f"wrote {run / VECTORS_FILE}")
         return
     moments, moments_metadata = load_moments(require(run / MOMENTS_FILE, "gradients"))
-    vectors = steering_vectors(moments, method.method, method.in_time, method.balance)
-    # S as the edit applies xi, in float32 (load_steering_vector).
+    vectors, eigenvalues = steering_vectors_and_eigenvalues(moments, method.method, method.in_time, method.balance)
+    # S and the cosine as the edit applies xi, in float32 (load_steering_vector).
     responses = gradient_responses_per_step(moments, vectors.astype(np.float32))
+    alignments = alignments_per_step(moments, vectors.astype(np.float32))
     gradient_pass = {key: moments_metadata[key] for key in ("dataset", "events", "keep", "seed", "blocks",
                                                             "batch_size", "device")}
     save_steering_vectors(run / VECTORS_FILE, vectors, moments["classes"], moments["blocks"], {
         **settings, "gradient moments file": MOMENTS_FILE, "steps": moments_metadata["steps"],
         "classes": config.classes.model_dump(), "network": moments_metadata["network"],
-        "gradient pass": gradient_pass}, response_per_step=responses)
+        "gradient pass": gradient_pass}, response_per_step=responses, alignment_per_step=alignments,
+        eigenvalue_per_step=eigenvalues)
     log(stage, f"{method.method}, {method.in_time}, balance {method.balance}: vectors of shape {vectors.shape} "
                f"(classes, blocks, steps, 2, width)")
     target = [str(name) for name in moments["classes"]].index(config.target)
     log(stage, f"gradient response S of the {config.target} vector (Eq. 21): " + ", ".join(
         f"block {int(block)} {responses[target, b].sum():.4f}" for b, block in enumerate(moments["blocks"])))
+    log(stage, f"mean over steps of cos(G, xi) of the {config.target} vector (Eq. 22): " + ", ".join(
+        f"block {int(block)} {alignments[target, b].mean():.4f}" for b, block in enumerate(moments["blocks"])))
+    if eigenvalues is not None:
+        log(stage, f"mean over steps of the FKT eigenvalue lambda of the {config.target} vector (Eq. 18): " + ", ".join(
+            f"block {int(block)} {eigenvalues[target, b].mean():.4f}" for b, block in enumerate(moments["blocks"])))
     log(stage, f"wrote {run / VECTORS_FILE}")
 
 
@@ -361,10 +370,39 @@ def first_order_slope(config: Config, run: Path) -> tuple[float | None, str]:
                   f"gradient pass")
 
 
+def mean_over_steps(config: Config, run: Path, key: str) -> tuple[float | None, str]:
+    """The mean over the Euler steps of cos(G_C, xi) (key ALIGNMENT_KEY, Eq. 22) or of lambda_C (EIGENVALUE_KEY,
+    Eq. 18) of the target's vector at steering.block, the columns of paper Tables 2 and 4, and the file it comes from;
+    or None and the reason.
+
+    The values per step come from the vectors file. For a file without them, they come from the run's
+    gradient_moments.npz if the run made its own vectors; a run started from a file has no moments. lambda_C exists
+    only for fkt.
+    """
+    method, target, block = config.steering_vectors, config.target, config.steering.block
+    if key == EIGENVALUE_KEY and method.method != "fkt":
+        return None, f"the FKT eigenvalue exists only for steering_vectors.method fkt, not {method.method}"
+    vectors_file = require(run / VECTORS_FILE, "steering-vectors")
+    per_step = load_per_step(vectors_file, key, target, block)
+    if per_step is not None:
+        return float(per_step.mean()), VECTORS_FILE
+    if method.from_file is not None:
+        return None, f"steering_vectors.from_file {method.from_file} stores no {key}, and the run has no gradient pass"
+    moments, _ = load_moments(require(run / MOMENTS_FILE, "gradients"))
+    if key == ALIGNMENT_KEY:
+        per_step = alignment_per_step(moments, load_steering_vector(vectors_file, target, block), target, block)
+    else:
+        per_step = steering_vector_and_eigenvalue(moments, target, block, method.method, method.in_time,
+                                                  method.balance)[1]
+    return float(per_step.mean()), MOMENTS_FILE
+
+
 def run_readout(config: Config, run: Path, devices: Devices) -> None:
     """R_60, the target shift, the selectivity curve, the response fits, and the Z lineshape fits (Sec. 5, App. E)."""
     stage = "readout"
     s, s_source = first_order_slope(config, run)
+    quality = {name: mean_over_steps(config, run, key) for name, key in (("mean alignment", ALIGNMENT_KEY),
+                                                                         ("mean FKT eigenvalue", EIGENVALUE_KEY))}
     require_generated(config, run)
     seeds, alphas = list(config.steering.seeds), list(config.steering.alphas)
     readout, classes = config.readout, config.classes
@@ -411,12 +449,18 @@ def run_readout(config: Config, run: Path, devices: Devices) -> None:
         "kept pairs": {name: int(np.sum(kept == name)) for name in class_names(classes)},
         "gradient response": s, "gradient response source": s_source if s is not None else None,
         "gradient response unavailable": s_source if s is None else None,
+        **{key: value for name, (number, source) in quality.items() for key, value in (
+            (name, number), (f"{name} source", source if number is not None else None),
+            (f"{name} unavailable", source if number is None else None))},
         "selectivity curve": {key: value.tolist() for key, value in curve.items()},
         "per seed and alpha": rows, "lineshape over seeds": None, "pole response fit": None}
     if s is None:
         log(stage, f"gradient response S (Eq. 21) UNAVAILABLE: {s_source}; readout.json has null")
     else:
         log(stage, f"gradient response S = {s:.4f} (Eq. 21, first order), from {s_source}")
+    for name, (number, source) in quality.items():
+        log(stage, f"{name} over the Euler steps: " + (f"{number:.4f}, from {source}" if number is not None else
+                                                       f"UNAVAILABLE: {source}; readout.json has null"))
     if fit_lineshape:
         grid = sorted({0.0, *alphas})
         poles = np.array([[fits[(seed, alpha)].pole for seed in seeds] for alpha in grid])
@@ -977,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
         devices = parse_devices(args.devices) if any(stage.gpu for stage in stages) else (torch.device("cpu"),)
         for stage in stages:
             run_stage(stage, config, run, devices, args.overwrite, warn_later=args.stage != "all")
-    except (StageError, ValidationError, NanError, DeviceError) as error:
+    except (StageError, ValidationError, NanError, DeviceError, NotUploadedError) as error:
         print(f"steer {args.stage}: {error}", file=sys.stderr)
         return 1
     return 0
