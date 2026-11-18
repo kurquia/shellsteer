@@ -15,11 +15,10 @@ validation_muon_pairs:
 
 # Paper App. C: the samples of ShellFlow-B and ShellGATr, 1,040,000 events each with one muon pair from the validation
 # events of the 2to4lep selection, in the paper's order and with its priority (default_rng(2030)). The rows are 161
-# long, the row length of the 2to4lep dataset. revision TODO-after-upload: the files are not on Hugging Face yet, and
-# the pipeline stops on this entry until revision holds the commit of the upload.
+# long, the row length of the 2to4lep dataset.
 validation_muon_pairs_2to4lep:
   hf_repo: kurquia/shellsteer-events
-  revision: TODO-after-upload
+  revision: 7bb8c5e61ab8254dc332dd79a5491efd19b03a7f
   files:
     directions: 2to4lep-directions-dataset.npz
     steering: 2to4lep-steering-dataset.npz

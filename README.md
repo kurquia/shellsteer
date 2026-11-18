@@ -217,9 +217,6 @@ The 2.4% of App. D.1, the largest change per bin of the other particle types, us
 
 #### App. C: `ShellFlow-B` and `ShellGATr`
 
-> The 2to4lep event files of App. C are not on Hugging Face yet.
-> Their entry `validation_muon_pairs_2to4lep` in `configs/datasets.yaml` has `revision: TODO-after-upload`, and every stage that reads events stops with a message until the revision holds the commit of the upload.
-
 App. C steers the Z at block 1 of the two networks trained on 2to4lep alone.
 Each config is `main_z_block1.yaml` with another network, the 2to4lep events, the paper's 12 values of $\alpha$, and seeds 2041 to 2043.
 Each network keeps the pairs from its own baselines, as in the paper.
