@@ -19,8 +19,8 @@ Ablating the same direction gives a Z peak about 18% broader.
 This repository holds the code, the configs, and the steering vectors of the paper.
 
 > [!NOTE]
-> TODO: remove this note when the paper is on arXiv and the dataset is public.
-> The paper link is a placeholder, and the event samples on Hugging Face are private until the release.
+> TODO: remove this note when the paper is on arXiv.
+> The paper link is a placeholder.
 
 ## What the code does
 
@@ -77,12 +77,6 @@ uv sync --extra gatr
 
 `uv.lock` pins torch 2.10.0. The paper's runs used it with CUDA 12.8 on NVIDIA B200 GPUs.
 The checkpoint and the event samples download from Hugging Face on the first run, at the revisions pinned in `configs/networks.yaml` and `configs/datasets.yaml`.
-
-The event samples are private until the release, so set a Hugging Face token that can read them (TODO: delete this line when the dataset is public):
-
-```bash
-export HF_TOKEN=hf_...
-```
 
 ## Quick start
 
@@ -333,12 +327,20 @@ Set `sampler.on_nan: stop` to stop the run at the first NaN instead.
 | Training skims | 2to4lep [[doi](https://doi.org/10.7483/OPENDATA.ATLAS.ZXYW.FXJO)] and 1LMET30 [[doi](https://doi.org/10.7483/OPENDATA.ATLAS.KPYL.P0EE)] | The events `ShellFlow` was trained on. |
 | Muon-pair samples | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `directions-dataset.npz`, `steering-dataset.npz` | 1,040,000 validation events each, with one muon pair, the real four-momenta, and the real pair mass. The first gives the gradients and steering vectors, the second is steered (Figs. 3, 5, and 7). |
 | All final states | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `all-final-states-dataset.npz` | 1,000,000 validation events of every final state, with the real four-momenta (Fig. 4). |
-| 2to4lep muon-pair samples | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `2to4lep-directions-dataset.npz`, `2to4lep-steering-dataset.npz` (not uploaded yet) | 1,040,000 validation events each of the 2to4lep selection, with one muon pair, for `ShellFlow-B` and `ShellGATr` (App. C). |
+| 2to4lep muon-pair samples | [kurquia/shellsteer-events](https://huggingface.co/datasets/kurquia/shellsteer-events): `2to4lep-directions-dataset.npz`, `2to4lep-steering-dataset.npz` | 1,040,000 validation events each of the 2to4lep selection, with one muon pair, for `ShellFlow-B` and `ShellGATr` (App. C). |
 | Network | [pomidori73/ShellFlow](https://huggingface.co/pomidori73/ShellFlow): `union_1LMET30_2to4lep/model.ckpt` | The `ShellFlow` checkpoint; residual-stream width 128. |
 | Model code | [pomidori/ShellFlow](https://github.com/pomidori/ShellFlow) | The `ShellFlow` architecture, installed as a dependency. |
 | Steering vectors | `vectors/main_block1.npz` in this repository | The steering vectors of the main text: Z, J/ψ, Υ, and rest at block 1, for each of the 200 Euler steps, with the gradient response, the cosine, and the FKT eigenvalue per step. |
 
 `configs/datasets.yaml` and `configs/networks.yaml` pin the Hugging Face commit of each file, so a run always loads the same files.
+
+The event files hold the raw ShellFlow rows of each event (`rows`), not network inputs.
+`shellsteer` normalises the rows for each network with ShellFlow's own normaliser and the network's `dataloader_config` in `configs/networks.yaml`, because `ShellFlow` and the two 2to4lep networks use different normalisation constants.
+
+The particle mask comes from the file (`particle_mask`), not from ShellFlow's collator.
+The collator of the current ShellFlow drops particles with $p_T \geq 1000$ GeV, but the collator of the paper's runs kept them.
+The stored mask is the paper's mask, so the network inputs are the paper's.
+In the three event files of `ShellFlow`, 63 events have such a particle: 9 in the directions sample, 5 in the steering sample, and 49 in the sample of all final states.
 
 ## Acknowledgements
 
