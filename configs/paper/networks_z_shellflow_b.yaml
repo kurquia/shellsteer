@@ -25,7 +25,7 @@ sampler:
 
 # Gradients of log m of the pair with respect to the residual stream, on the directions sample.
 gradients:
-  blocks: [0, 1, 2, 3, 4, 5]
+  blocks: [1]
   seed: 2040
 
 # Steering vectors from the class moments of the gradients.
