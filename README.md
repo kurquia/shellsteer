@@ -2,7 +2,7 @@
 
 # Who Moved My Z Boson? Revealing Resonance Features Inside a Neural Network
 
-[![arXiv](https://img.shields.io/badge/arXiv-TODO-b31b1b.svg)](https://arxiv.org/abs/TODO)
+[![arXiv](https://img.shields.io/badge/arXiv-2611.26291-b31b1b.svg)](https://arxiv.org/abs/2611.26291)
 [![Models](https://img.shields.io/badge/🤗%20Models-pomidori73%2FShellFlow-ffd21e)](https://huggingface.co/pomidori73/ShellFlow)
 [![Data](https://img.shields.io/badge/🤗%20Data-kurquia%2Fshellsteer--events-ffd21e)](https://huggingface.co/datasets/kurquia/shellsteer-events)
 [![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
@@ -17,10 +17,6 @@
 The Z steering vector moves the fitted pole of the Z from 62 GeV to 131 GeV for $\alpha$ from −3 to 3, while the rest of the dimuon spectrum changes little.
 Ablating the same direction gives a Z peak about 18% broader.
 This repository holds the code, the configs, and the steering vectors of the paper.
-
-> [!NOTE]
-> TODO: remove this note when the paper is on arXiv.
-> The paper link is a placeholder.
 
 ## What the code does
 
@@ -350,15 +346,16 @@ This work was supported by a research grant (VIL57416) from VILLUM FONDEN.
 
 ## Citation
 
-If you use this code, cite the paper (TODO: arXiv id and authors):
+If you use this code, cite the paper:
 
 ```bibtex
-@article{TODO,
+@article{urquia-calderon-2026-z,
   title         = {Who Moved My {$Z$} Boson? Revealing Resonance Features Inside a Neural Network},
-  author        = {TODO},
+  author        = {Urqu{\'i}a-Calder{\'o}n, Kevin A. and Kato, Midori and Timiryasov, Inar and Ruchayskiy, Oleg},
   year          = {2026},
-  eprint        = {TODO},
-  archivePrefix = {arXiv}
+  eprint        = {2611.26291},
+  archivePrefix = {arXiv},
+  primaryClass  = {hep-ph}
 }
 ```
 
